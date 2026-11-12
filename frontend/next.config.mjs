@@ -1,0 +1,13 @@
+/** @type {import('next').NextConfig} */
+const backend = process.env.BACKEND_URL || "http://127.0.0.1:8000";
+
+const nextConfig = {
+  reactStrictMode: true,
+  output: "standalone",
+  async rewrites() {
+    // Browser always calls relative /api — proxied server-side to the FastAPI backend.
+    return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
+  },
+};
+
+export default nextConfig;

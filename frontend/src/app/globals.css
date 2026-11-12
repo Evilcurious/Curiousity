@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- Monochrome design tokens ---------- */
+:root {
+  --c-base: 255 255 255;    /* #FFFFFF pure white */
+  --c-surface: 250 250 250; /* light gray background */
+  --c-raised: 255 255 255;
+  --c-edge: 218 218 220;    /* dark gray borders */
+  --c-ink: 0 0 0;           /* #000000 pure black */
+  --c-muted: 102 102 105;
+  --c-faint: 160 160 165;
+  --c-accent: 0 0 0;
+}
+
+.dark {
+  --c-base: 0 0 0;          /* pure black */
+  --c-surface: 18 18 20;
+  --c-raised: 28 28 31;
+  --c-edge: 58 58 62;       /* dark gray borders */
+  --c-ink: 255 255 255;     /* pure white text */
+  --c-muted: 161 161 165;
+  --c-faint: 100 100 105;
+  --c-accent: 255 255 255;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  @apply bg-base text-ink antialiased;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  border-color: rgb(var(--c-edge));
+}
+
+::selection {
+  background: rgb(var(--c-ink) / 0.9);
+  color: rgb(var(--c-base));
+}
+
+/* ---------- Scrollbars ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--c-faint) / 0.4); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-muted) / 0.6); }
+
+/* ---------- Markdown content ---------- */
+.markdown-body { @apply text-[15px] leading-7; }
+.markdown-body p { @apply my-3; }
+.markdown-body h1 { @apply text-2xl font-semibold mt-6 mb-3; }
+.markdown-body h2 { @apply text-xl font-semibold mt-6 mb-3; }
+.markdown-body h3 { @apply text-lg font-semibold mt-5 mb-2; }
+.markdown-body ul { @apply list-disc pl-6 my-3 space-y-1; }
+.markdown-body ol { @apply list-decimal pl-6 my-3 space-y-1; }
+.markdown-body a { @apply underline underline-offset-2 hover:opacity-70; }
+.markdown-body blockquote {
+  @apply border-l-2 pl-4 my-3 opacity-80 italic;
+  border-color: rgb(var(--c-edge));
+}
+.markdown-body table { @apply w-full my-4 text-sm border-collapse; }
+.markdown-body th, .markdown-body td { @apply border px-3 py-2 text-left; border-color: rgb(var(--c-edge)); }
+.markdown-body th { @apply bg-surface font-medium; }
+.markdown-body hr { @apply my-6 border-0 h-px bg-edge; }
+.markdown-body code:not(pre code) {
+  @apply px-1.5 py-0.5 rounded text-[13px] font-mono bg-surface border;
+  border-color: rgb(var(--c-edge));
+}
+
+/* ---------- Code blocks ---------- */
+.code-block { @apply rounded-lg overflow-hidden border my-3; border-color: rgb(var(--c-edge)); }
+.code-block-header {
+  @apply flex items-center justify-between px-3 py-1.5 text-xs font-medium bg-surface border-b;
+  border-color: rgb(var(--c-edge));
+}
+
+/* ---------- Skeleton shimmer ---------- */
+.skeleton {
+  @apply rounded bg-surface;
+  background-image: linear-gradient(
+    90deg,
+    rgb(var(--c-edge) / 0.25) 0%,
+    rgb(var(--c-edge) / 0.5) 40%,
+    rgb(var(--c-edge) / 0.25) 80%
+  );
+  background-size: 400px 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+
+/* ---------- Typing indicator ---------- */
+.typing-dot { @apply inline-block w-1.5 h-1.5 rounded-full bg-muted; animation: pulseDot 1.4s ease-in-out infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ---------- Focus rings (monochrome) ---------- */
+.focus-ring { @apply outline-none ring-1 ring-transparent focus-visible:ring-ink transition-shadow; }
+
+/* ---------- Streamed cursor ---------- */
+.stream-cursor::after {
+  content: "▍";
+  @apply ml-0.5 inline-block animate-pulse;
+}
+
+textarea { resize: none; }

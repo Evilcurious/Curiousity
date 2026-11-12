@@ -249,3 +249,37 @@ async def decide_approval(execution_id: str, request: Request,
           details={"decision": decision}, ip=client_ip(request))
     db.commit()
     return {"ok": True, "status": execution.status}
+
+@router.post("/tool-executions/{execution_id}/continue")
+async def continue_after_approval(execution_id: str, request: Request,
+                                  user: User = Depends(get_current_user),
+                                  db: Session = Depends(get_db)):
+    """Continue agent generation after the user approved/denied a tool execution."""
+    from app.models import ToolExecution
+    execution = db.get(ToolExecution, execution_id)
+    if execution is None or execution.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    conv = db.get(Conversation, execution.conversation_id) if execution.conversation_id else None
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    model = chat_service.resolve_model(db, user, conv.model_id)
+    handle = register_generation(conv.id, user.id)
+    engine = AgentEngine(db, user, conv, model, handle)
+    approved = execution.status == "approved"
+    body = await request.json()
+    tool_call_id = body.get("tool_call_id") or ""
+    if not tool_call_id and execution.message_id:
+        assistant_msg = db.get(Message, execution.message_id)
+        if assistant_msg and assistant_msg.tool_calls:
+            for tc in assistant_msg.tool_calls:
+                if tc.get("name") == execution.tool_name:
+                    tool_call_id = tc.get("id", "")
+                    break
+
+    async def events() -> AsyncIterator[dict]:
+        yield {"type": "message_start", "resumed": True}
+        async for event in engine.resume_after_approval(
+                execution.id, approved, tool_call_id):
+            yield event
+
+    return StreamingResponse(_sse_stream(events()), media_type="text/event-stream")
