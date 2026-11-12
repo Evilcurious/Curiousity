@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database / data
+*.sqlite3
+uploads/
+ollama-models/
+postgres-data/
+redis-data/
+
+# Misc
+.DS_Store
+*.log
+.idea/
+.vscode/
+dist/
+build/
+coverage/

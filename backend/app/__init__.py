@@ -1,0 +1,1 @@
+"""Curiousity backend application package."""
