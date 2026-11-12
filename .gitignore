@@ -20,6 +20,7 @@ npm-debug.log*
 
 # Database / data
 *.sqlite3
+backend/data/
 uploads/
 ollama-models/
 postgres-data/
