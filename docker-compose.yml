@@ -1,0 +1,135 @@
+# Curiousity — self-hosted AI agent platform
+# Services: nginx → frontend + backend → postgres, redis, ollama (private network)
+#
+# Quick start:
+#   cp .env.example .env   # set SECRET_KEY, ENCRYPTION_KEY, ADMIN_EMAIL, ADMIN_PASSWORD
+#   docker compose up -d --build
+#   # with the bundled Ollama server + model:
+#   COMPOSE_PROFILES=ollama docker compose up -d --build
+
+name: curiousity
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-curiousity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-curiousity}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-curiousity} -d ${POSTGRES_DB:-curiousity}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [curiousity-internal]
+    # No ports published — PostgreSQL is never exposed publicly.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [curiousity-internal]
+    # No ports published — Redis is never exposed publicly.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-curiousity}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-curiousity}
+      REDIS_URL: redis://redis:6379/0
+      AI_BASE_URL: ${AI_BASE_URL:-http://ollama:11434}
+      UPLOAD_DIR: /data/uploads
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks: [curiousity-internal]
+    # No ports published — only reachable via the nginx proxy.
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [curiousity-internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks: [curiousity-internal]
+
+  # Optional bundled Ollama — start with: COMPOSE_PROFILES=ollama docker compose up -d
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    networks: [curiousity-internal]
+    # No ports published — the backend reaches Ollama over the private network.
+    # To use GPU: deploy.resources.reservations.devices (see docs/DEPLOYMENT.md).
+
+  # One-shot model pull: COMPOSE_PROFILES=ollama docker compose run --rm ollama-pull
+  ollama-pull:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${AI_MODEL:-curiousity-glm} || ollama pull glm4"]
+    networks: [curiousity-internal]
+
+volumes:
+  postgres-data:
+  redis-data:
+  uploads:
+  ollama-models:
+
+networks:
+  curiousity-internal:
+    driver: bridge

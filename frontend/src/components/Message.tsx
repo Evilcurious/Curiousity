@@ -160,7 +160,7 @@ export const Message = memo(function Message({
             </div>
           )}
 
-          {!isStreaming && message.content && (
+          {!isStreaming && (message.content || message.error) && (
             <div className="mt-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button
                 onClick={copy}
@@ -170,7 +170,7 @@ export const Message = memo(function Message({
                 {copied ? <Check size={12} /> : <Copy size={12} />}
                 {copied ? "Copied" : "Copy"}
               </button>
-              {!isUser && onRegenerate && (
+              {!isUser && (message.content || message.error) && onRegenerate && (
                 <button
                   onClick={onRegenerate}
                   className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted hover:text-ink hover:bg-surface transition-colors focus-ring"
