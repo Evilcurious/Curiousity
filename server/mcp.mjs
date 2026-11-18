@@ -11,14 +11,13 @@ export const simpleToolName = (name) => typeof name === 'string' && /^[\w.-]{1,1
 export function mcpInput(body, existing, store) {
   let kind = body.kind;
   if (!['buffer', 'remote'].includes(kind)) throw new HttpError(400, 'Choose Buffer or a remote MCP server.');
-  const remote = kind === 'buffer' ? new URL(bufferEndpoint) : externalUrl(text(body.url, 600));
+  const remote = kind === 'buffer' ? new URL(bufferEndpoint) : externalUrl(text(body.url, 600), { allowPort: true });
   if (remote.hostname.replace(/\.$/, '') === 'mcp.buffer.com') {
     if (remote.href !== bufferEndpoint) throw new HttpError(400, 'Use the official Buffer MCP endpoint.');
     kind = 'buffer';
   }
-  const name = text(body.name, 64) || (kind === 'buffer' ? 'Buffer' : '');
-  if (!name) throw new HttpError(400, 'Give the server a name.');
-  const given = text(body.token, 4000);
+  const name = text(body.name, 64) || (kind === 'buffer' ? 'Buffer' : remote.host.slice(0, 64));
+  const given = text(body.token, 4000).replace(/^Bearer +/i, '');
   if (given && !/^[A-Za-z0-9._~+/-]+=*$/.test(given)) throw new HttpError(400, 'Enter just the bearer token (without “Bearer ” or whitespace).');
   const secret = body.clearToken === true ? '' : given ? store.seal(given) : existing?.url === remote.href && existing.kind === kind ? existing.secret : '';
   if (kind === 'buffer' && !secret) throw new HttpError(400, 'Enter your Buffer API key from Buffer → Settings → API.');
@@ -60,7 +59,7 @@ export async function withMcp(profile, store, use, request = guardedFetch) {
     const current = ++id;
     const message = { jsonrpc: '2.0', method, ...(notify ? {} : { id: current }), ...(params === undefined ? {} : { params }) };
     try {
-      const response = await request(profile.url, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(message), signal });
+      const response = await request(profile.url, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(message), signal }, { allowPort: profile.kind === 'remote' });
       const advertised = response.headers.get('mcp-session-id');
       if (method === 'initialize' && advertised && /^[\x21-\x7e]{1,256}$/.test(advertised)) sessionId = advertised;
       if (!response.ok) {
@@ -108,7 +107,7 @@ export async function withMcp(profile, store, use, request = guardedFetch) {
   } finally {
     if (sessionId) {
       // A server can opt out of DELETE; tool results are not retried.
-      request(profile.url, { method: 'DELETE', headers: headers(), signal: AbortSignal.timeout(2500) }).then((res) => res.body?.cancel()).catch(() => {});
+      request(profile.url, { method: 'DELETE', headers: headers(), signal: AbortSignal.timeout(2500) }, { allowPort: profile.kind === 'remote' }).then((res) => res.body?.cancel()).catch(() => {});
     }
   }
 }

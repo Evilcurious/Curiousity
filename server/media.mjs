@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { ROOT, ffmpeg, python, run, runYt, toolsStatus } from './tools.mjs';
+import { ROOT, ffmpeg, run, runYt, toolsStatus } from './tools.mjs';
+import { runWhisper } from './transcription.mjs';
 import { maxSourceBytes, maxSourceSeconds, jobDir } from './store.mjs';
 import { buildCandidates, clipCues, normalizeCues, parseVtt, pickAutoMoments, pickMoments } from './moments.mjs';
 import { makeAss, makeSrt } from './captions.mjs';
@@ -241,12 +242,6 @@ async function downloadCaptions(meta, url, scratch, signal, target) {
     }
   } catch (error) { if (signal.aborted) throw signal.reason; }
   return null;
-}
-
-async function runWhisper(path, signal, english = false) {
-  const res = await run(python, [join(ROOT, 'scripts', 'transcribe.py'), path, ...(english ? ['--translate'] : [])], { signal, timeout: 2 * 60 * 60_000, maxOutput: 24 * 1024 * 1024 });
-  const result = JSON.parse(res.out.trim().split('\n').at(-1));
-  return { cues: normalizeCues(result.cues), language: languageCode(result.language), label: english ? 'Local Whisper translation' : 'Local Whisper' };
 }
 
 async function findTranscript({ meta, options, source, scratch, store, tools, signal, audio }) {

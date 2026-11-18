@@ -14,17 +14,22 @@ export function run(command, args, opts = {}) {
     if (signal?.aborted) return reject(signal.reason);
     const grouped = process.platform !== 'win32';
     const proc = spawn(command, args, { cwd, detached: grouped, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let out = '', err = '', limitError;
+    let out = '', err = '', limitError, callbackError;
     const stop = (s = 'SIGINT') => {
       if (proc.exitCode !== null || proc.signalCode || !proc.pid) return;
       try { if (grouped) process.kill(-proc.pid, s); else proc.kill(s); } catch { /* Already exited. */ }
+    };
+    const report = (callback, value) => {
+      if (!callback || callbackError) return;
+      try { callback(value); }
+      catch (error) { callbackError = error; stop('SIGKILL'); }
     };
     const abort = () => stop('SIGKILL');
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => { limitError = new Error('The media tool timed out.'); stop('SIGKILL'); }, timeout);
     timer.unref();
     proc.stdout.on('data', (chunk) => {
-      if (onData) onData(chunk);
+      if (onData) report(onData, chunk);
       else {
         out += chunk.toString();
         if (out.length > maxOutput) { limitError = new Error('The media tool returned too much data.'); stop('SIGKILL'); }
@@ -33,13 +38,14 @@ export function run(command, args, opts = {}) {
     proc.stderr.on('data', (chunk) => {
       const line = chunk.toString();
       err = (err + line).slice(-12_000);
-      onLog?.(line);
+      report(onLog, line);
     });
     const dispose = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
     proc.on('error', (error) => { dispose(); reject(error); });
     proc.on('close', (code) => {
       dispose();
       if (signal?.aborted) return reject(signal.reason);
+      if (callbackError) return reject(callbackError);
       if (limitError) return reject(limitError);
       if (code !== 0) return reject(Object.assign(new Error(`Media tool exited with code ${code}.`), { output: `${out.slice(-3000)}\n${err}` }));
       resolvePromise({ out, err });

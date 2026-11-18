@@ -8,6 +8,13 @@ export class HttpError extends Error {
 export const maxClips = 20;
 export const liveLimits = [2, 5, 10, 15, 30];
 const videoId = /^[a-zA-Z0-9_-]{11}$/;
+
+export function captionStyleInput(style) {
+  if (style !== undefined && (!style || typeof style !== 'object' || Array.isArray(style) || Object.entries(style).some(([key, value]) => !Object.hasOwn(captionStyleOptions, key) || typeof value !== 'string' || !Object.hasOwn(captionStyleOptions[key], value)))) {
+    throw new HttpError(400, 'Choose a supported caption font, effect, size and animation.');
+  }
+  return resolveCaptionStyle(style);
+}
 export function youtubeSource(raw) {
   let input;
   try { input = new URL(typeof raw === 'string' ? raw.trim() : ''); } catch { /* Report the common message below. */ }
@@ -47,16 +54,13 @@ export function jobOptions(body = {}) {
   const hashtagLanguage = romanCode(body.hashtagLanguage ?? 'source');
   if (captionLanguage !== 'source' && (typeof captionLanguage !== 'string' || !Object.hasOwn(languages, captionLanguage))) throw new HttpError(400, 'Choose a supported caption language.');
   if (!['source', 'off'].includes(hashtagLanguage) && (typeof hashtagLanguage !== 'string' || !Object.hasOwn(languages, hashtagLanguage))) throw new HttpError(400, 'Choose a supported hashtag language.');
-  const style = body.captionStyle;
-  if (style !== undefined && (!style || typeof style !== 'object' || Array.isArray(style) || Object.entries(style).some(([key, value]) => !Object.hasOwn(captionStyleOptions, key) || typeof value !== 'string' || !Object.hasOwn(captionStyleOptions[key], value)))) {
-    throw new HttpError(400, 'Choose a supported caption font, effect, size and animation.');
-  }
+  const captionStyle = captionStyleInput(body.captionStyle);
   const aiProfile = demo ? 'local' : body.aiProfile ?? 'workspace';
   if (typeof aiProfile !== 'string' || (!['workspace', 'local'].includes(aiProfile) && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(aiProfile))) {
     throw new HttpError(400, 'Select a saved AI profile, Workspace default, or Local analysis.');
   }
   return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true,
-    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage, captionStyle: resolveCaptionStyle(style), aiProfile };
+    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage, captionStyle, aiProfile };
 }
 
 export function text(value, max, fallback = '') {

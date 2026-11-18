@@ -3,16 +3,19 @@ import express from 'express';
 import ipaddr from 'ipaddr.js';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createStore, activeStatuses, boundedEnv, jobDir, maxSourceSeconds } from './store.mjs';
 import { processProject } from './media.mjs';
-import { HttpError, jobOptions, maxClips, liveLimits, text } from './validation.mjs';
-import { compatibleProvider, listModels, providerInput, publicProvider } from './providers.mjs';
+import { captionFiles, captionInputPath, captionJobPublic, isCaptionJob, processCaptionJob } from './device-captions.mjs';
+import { receiveVideo, responseSignal } from './caption-upload.mjs';
+import { chatInput } from './chat.mjs';
+import { HttpError, captionStyleInput, jobOptions, maxClips, liveLimits, text } from './validation.mjs';
+import { chatWithProvider, compatibleProvider, listModels, providerInput, publicProvider } from './providers.mjs';
 import { createTikTok } from './tiktok.mjs';
 import { createGoogle, googleUploadActive, publicGoogleUploads } from './google.mjs';
 import { canUsePremium, createAuth, initializeAdmin, limiter, mustChangePassword, publicAccount } from './accounts.mjs';
-import { publicBrand, scopedStore, sharedProviders, updateBrand } from './workspaces.mjs';
+import { publicBrand, repairWorkspace, scopedStore, sharedProviders, updateBrand } from './workspaces.mjs';
 import { browseShared, mediaNames, saveSharedClip, sharedJob } from './library.mjs';
 import { inspectMcp, mcpInput, publicMcp, runMcp } from './mcp.mjs';
 import { allocateVideoLink, bufferId, bufferMediaUrl, bufferOrganizations, bufferPostArgs, listBufferChannels, submitBufferDraft, videoLink } from './buffer.mjs';
@@ -39,7 +42,9 @@ if (proxyMode === 'loopback') app.set('trust proxy', (address, hop) => hop === 0
 else if (proxyMode === '1') app.set('trust proxy', 1);
 else if (proxyMode !== '0') throw new Error('TRUST_PROXY must be 0, loopback, or 1.');
 if (publicOrigin && proxyMode === '0') console.warn('PUBLIC_ORIGIN is set but proxy trust is off. For a host-local HTTPS reverse proxy, set TRUST_PROXY=loopback.');
-const server = createServer(app);
+// There is no total request-body deadline on streamed video uploads. Tight
+// timeouts still apply to request headers, other bodies and stalled uploads.
+const server = createServer({ requestTimeout: 0, headersTimeout: 30_000 }, app);
 const webRoot = join(ROOT, 'dist');
 const store = createStore();
 await initializeAdmin(store);
@@ -61,15 +66,17 @@ const auth = createAuth(store, { secure, embedded: preview });
 const networkLimit = limiter(60_000);
 const dailySharedLimit = Math.floor(boundedEnv('PREMIUM_DAILY_JOBS', 10, 1, 200));
 const services = new Map();
-const deleting = new Set(), copying = new Set();
+const deleting = new Set(), copying = new Set(), chatting = new Set();
 let current, closing = false, recovering = false;
 
+for (const account of store.state.users) if (repairWorkspace(account)) recovering = true;
 for (const job of store.state.jobs) {
   if (activeStatuses.has(job.status) && job.status !== 'queued') {
     job.status = 'failed';
     job.detail = 'The server restarted before this project finished.';
     job.error = job.detail;
-    await rm(join(jobDir(job.id), 'work'), { recursive: true, force: true });
+    const dir = jobDir(job.id);
+    await rm(isCaptionJob(job) && !job.trackReady ? dir : join(dir, 'work'), { recursive: true, force: true });
     recovering = true;
   }
   for (const clip of job.clips || []) if (clip.bufferDraft?.state === 'sending') {
@@ -104,9 +111,15 @@ setInterval(() => {
   }
 }, 2700).unref();
 
+const ownedJob = (req) => store.state.jobs.find((job) => job.id === req.params.id && job.ownerId === req.account.id && !deleting.has(job.id));
 const jobById = (req) => {
-  const job = store.state.jobs.find((item) => item.id === req.params.id && item.ownerId === req.account.id);
-  if (!job || deleting.has(job.id)) throw new HttpError(404, 'This project could not be found.');
+  const job = ownedJob(req);
+  if (!job || isCaptionJob(job)) throw new HttpError(404, 'This project could not be found.');
+  return job;
+};
+const captionById = (req) => {
+  const job = ownedJob(req);
+  if (!job || !isCaptionJob(job) || job.status === 'uploading') throw new HttpError(404, 'This caption project could not be found.');
   return job;
 };
 const clipById = (job, id) => {
@@ -151,17 +164,30 @@ async function work() {
   const ctrl = new AbortController();
   const session = { signal: ctrl.signal, finishCapture: null };
   current = { ctrl, job, session };
-  try { await processProject(job, scopedStore(store, account), session, (changes) => touch(job, changes)); }
+  try {
+    const process = isCaptionJob(job) ? processCaptionJob : processProject;
+    await process(job, scopedStore(store, account), session, (changes) => touch(job, changes));
+  }
   catch (error) {
     if (ctrl.signal.aborted) touch(job, { status: 'cancelled', detail: 'Project stopped.' });
-    else touch(job, { status: 'failed', error: error.message || 'Project processing failed.', detail: error.message || 'Project processing failed.' });
+    else {
+      const detail = (isCaptionJob(job) && (error.code || error instanceof SyntaxError)) ? 'Video processing failed. Check the source and available disk space.' : error.message || 'Project processing failed.';
+      touch(job, { status: 'failed', error: detail, detail });
+    }
   } finally { current = null; queueMicrotask(work); }
 }
 
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff').set('Referrer-Policy', 'no-referrer');
   const framing = dev ? '' : "; frame-ancestors 'self'";
-  res.set('Content-Security-Policy', `default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'${framing}`);
+  if (req.method === 'POST' && req.path === '/api/captions/upload') {
+    res.set('Connection', 'close');
+  } else if (req.get('transfer-encoding') || Number(req.get('content-length')) > 0) {
+    const bodyDeadline = setTimeout(() => req.destroy(), 30_000).unref();
+    const received = () => clearTimeout(bodyDeadline);
+    req.once('end', received).once('close', received);
+  }
+  res.set('Content-Security-Policy', `default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'${framing}`);
   next();
 });
 app.use('/api', (req, res, next) => {
@@ -182,7 +208,8 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
-app.use('/api', express.json({ limit: '192kb' }));
+const jsonBody = express.json({ limit: '192kb' });
+app.use('/api', (req, res, next) => req.method === 'POST' && req.path === '/captions/upload' ? next() : jsonBody(req, res, next));
 
 const authResponse = (account) => ({ user: publicAccount(account), branding: publicBrand(store), allowSignup: auth.allowSignup });
 function allowPassword(req) {
@@ -283,7 +310,12 @@ function reserveSharedUse(account) {
   meter.jobs++;
   account.premiumMeter = meter;
 }
-app.get('/api/projects', (req, res) => res.json(req.scoped.state.jobs.filter((job) => !deleting.has(job.id)).map(jobPublic)));
+function checkQueue(account) {
+  const active = store.state.jobs.filter((item) => item.ownerId && activeStatuses.has(item.status));
+  if (active.length >= 10 || active.filter((item) => item.ownerId === account.id).length >= 2) throw new HttpError(429, 'The project queue is full. Wait for an active project to finish.');
+}
+
+app.get('/api/projects', (req, res) => res.json(req.scoped.state.jobs.filter((job) => !isCaptionJob(job) && !deleting.has(job.id)).map(jobPublic)));
 app.post('/api/projects', async (req, res) => {
   const options = jobOptions(req.body || {});
   const tools = await toolsStatus();
@@ -293,8 +325,7 @@ app.post('/api/projects', async (req, res) => {
   const profile = selection ? req.scoped.chatProfile(selection) : null;
   if (selection && !profile && options.aiProfile !== 'workspace') throw new HttpError(404, 'This AI model is not available to your account.');
   if (profile && !profile.model) throw new HttpError(400, 'Choose a chat model for this AI profile first.');
-  const active = store.state.jobs.filter((item) => item.ownerId && activeStatuses.has(item.status));
-  if (active.length >= 10 || active.filter((item) => item.ownerId === req.account.id).length >= 2) throw new HttpError(429, 'The project queue is full. Wait for an active project to finish.');
+  checkQueue(req.account);
   if (profile && !req.scoped.state.providers.includes(profile)) reserveSharedUse(req.account);
   const now = new Date().toISOString();
   const job = { id: randomUUID(), ownerId: req.account.id, chatProviderId: profile?.id || null, title: options.demo ? 'The anatomy of a great hook' : 'YouTube project', options, status: 'queued', detail: 'Waiting for the media worker.', progress: 0, clips: [], createdAt: now, updatedAt: now };
@@ -319,8 +350,7 @@ app.post('/api/projects/:id/finish-capture', (req, res) => {
   touch(job, { detail: 'Closing the live recording and preparing to analyze it.' });
   res.json(jobPublic(job));
 });
-app.delete('/api/projects/:id', async (req, res) => {
-  const job = jobById(req);
+async function removeJob(job) {
   if (activeStatuses.has(job.status) || job.clips.some(uploadBusy)) throw new HttpError(409, 'Wait for the project and any uploads to finish before deleting it.');
   deleting.add(job.id);
   try {
@@ -329,8 +359,8 @@ app.delete('/api/projects/:id', async (req, res) => {
     store.state.bufferLinks = store.state.bufferLinks.filter((entry) => entry.jobId !== job.id);
     store.save();
   } finally { deleting.delete(job.id); }
-  res.status(204).end();
-});
+}
+app.delete('/api/projects/:id', async (req, res) => { await removeJob(jobById(req)); res.status(204).end(); });
 function respondMedia(req, res, next, job, clip, file) {
   if (!mediaNames.has(file) || (file === 'captions.srt' && !clip.withCaptions) || (file === 'poster.jpg' && !clip.withPoster)) throw new HttpError(404, 'File not found.');
   if (file === 'captions.srt') res.type('application/x-subrip');
@@ -421,6 +451,99 @@ app.get('/media/buffer/:token.mp4', (req, res, next) => {
   respondMedia(req, res, next, job, clipById(job, entry.clipId), 'video.mp4');
 });
 
+app.get('/api/captions', (req, res) => res.json(req.scoped.state.jobs.filter((job) => isCaptionJob(job) && job.status !== 'uploading' && !deleting.has(job.id)).map(captionJobPublic)));
+app.post('/api/captions/upload', async (req, res) => {
+  if (!req.is('application/octet-stream') || ![undefined, 'identity'].includes(req.get('content-encoding'))) throw new HttpError(415, 'Send an uncompressed video file.');
+  let setting;
+  if (req.query.style !== undefined) {
+    if (typeof req.query.style !== 'string' || req.query.style.length > 800) throw new HttpError(400, 'Choose a valid video caption style.');
+    try { setting = JSON.parse(req.query.style); } catch { throw new HttpError(400, 'Choose a valid video caption style.'); }
+  }
+  const style = captionStyleInput(setting);
+  const filename = typeof req.query.name === 'string' ? req.query.name.split(/[\\/]/).at(-1).replace(/\p{C}/gu, '') : '';
+  const title = text(filename, 180) || 'Untitled video';
+  const request = responseSignal(res);
+  let job;
+  try {
+    const tools = await toolsStatus();
+    request.signal.throwIfAborted();
+    if (!tools.ffmpeg) throw new HttpError(503, 'Install FFmpeg using the Setup guide to caption device videos.');
+    const choice = req.scoped.state.captions;
+    const profile = choice.model && req.scoped.state.providers.find((item) => item.id === choice.providerId && compatibleProvider(item));
+    if (!profile && !tools.whisper) throw new HttpError(503, 'Install local Whisper or select a timestamped Caption engine in AI provider settings.');
+    checkQueue(req.account);
+    const uploading = store.state.jobs.filter((item) => item.status === 'uploading');
+    if (uploading.length >= 3 || uploading.some((item) => item.ownerId === req.account.id)) throw new HttpError(429, 'Another video is uploading. Wait for the upload to finish.');
+    const now = new Date().toISOString();
+    const captionEngine = profile ? { providerId: profile.id, type: profile.type, baseUrl: profile.baseUrl, model: choice.model } : null;
+    job = { id: randomUUID(), kind: 'captions', ownerId: req.account.id, title, style, captionEngine, status: 'uploading', progress: 0, clips: [], createdAt: now, updatedAt: now };
+    store.state.jobs.unshift(job);
+    store.save();
+    await mkdir(jobDir(job.id), { recursive: true, mode: 0o700 });
+    await receiveVideo(req, captionInputPath(job.id), request.signal);
+    request.signal.throwIfAborted();
+    touch(job, { status: 'queued', detail: 'Waiting for the media worker.' });
+    res.status(202).json(captionJobPublic(job));
+    queueMicrotask(work);
+  } catch (error) {
+    if (job) {
+      store.state.jobs = store.state.jobs.filter((item) => item !== job);
+      await rm(jobDir(job.id), { recursive: true, force: true });
+      store.save();
+    }
+    if (request.signal.aborted) return;
+    if (['ENOSPC', 'EDQUOT'].includes(error.code)) throw new HttpError(507, 'The server is out of disk space. Free some space and retry the upload.');
+    throw error;
+  } finally { request.release(); }
+});
+app.post('/api/captions/:id/render', async (req, res) => {
+  const job = captionById(req);
+  const style = captionStyleInput(req.body?.style);
+  const tools = await toolsStatus();
+  if (!store.state.jobs.includes(job) || deleting.has(job.id)) throw new HttpError(404, 'This caption project could not be found.');
+  if (!job.trackReady || current?.job === job || activeStatuses.has(job.status)) throw new HttpError(409, 'Wait for the current caption task to finish.');
+  if (!tools.subtitles) throw new HttpError(503, 'Install FFmpeg with libass to render a styled MP4.');
+  checkQueue(req.account);
+  touch(job, { style, status: 'queued', detail: 'Waiting to render the new style.', progress: 0, error: null });
+  res.status(202).json(captionJobPublic(job));
+  queueMicrotask(work);
+});
+app.post('/api/captions/:id/cancel', async (req, res) => {
+  const job = captionById(req);
+  if (current?.job === job && activeStatuses.has(job.status)) current.ctrl.abort(new Error('Caption task stopped.'));
+  else if (job.status === 'queued') {
+    touch(job, { status: 'cancelled', detail: 'Caption task removed from the queue.' });
+    if (!job.trackReady) await rm(jobDir(job.id), { recursive: true, force: true });
+  }
+  res.json(captionJobPublic(job));
+});
+app.delete('/api/captions/:id', async (req, res) => { await removeJob(captionById(req)); res.status(204).end(); });
+app.get('/api/captions/:id/:file', (req, res, next) => {
+  const job = captionById(req), file = req.params.file;
+  if (!captionFiles.has(file) || (file === 'video.mp4' ? !job.renderVersion : !job.trackReady)) throw new HttpError(404, 'File not found.');
+  if (file === 'captions.srt') res.type('application/x-subrip');
+  const path = join(jobDir(job.id), file);
+  const done = (error) => { if (error) next(error); };
+  if (req.query.download === '1') res.download(path, `curiousity-${job.id.slice(0, 8)}.${file.split('.').at(-1)}`, { dotfiles: 'allow' }, done);
+  else res.sendFile(path, { dotfiles: 'allow' }, done);
+});
+
+app.post('/api/chat', async (req, res) => {
+  const { providerId, messages } = chatInput(req.body);
+  const profile = profileById(req, providerId);
+  if (req.body.revision !== undefined && (profile.revision || profile.id) !== req.body.revision) throw new HttpError(409, 'This AI profile changed. Refresh your workspace before sending any messages.');
+  if (!profile.model) throw new HttpError(400, 'Choose a chat model for this profile in Settings.');
+  if (chatting.has(req.account.id) || chatting.size >= 12) throw new HttpError(429, 'Chat is busy. Wait for a reply before sending another message.');
+  networkLimit(`chat:${req.account.id}`, 16);
+  const request = responseSignal(res);
+  chatting.add(req.account.id);
+  try {
+    const reply = await chatWithProvider({ ...profile }, store, messages, request.signal);
+    if (!request.signal.aborted) res.json(reply);
+  } catch (error) { if (!request.signal.aborted) throw error; }
+  finally { request.release(); chatting.delete(req.account.id); }
+});
+
 const providerOptions = (req) => ({ allowLocal: req.account.role === 'admin' });
 app.post('/api/providers', (req, res) => {
   const profile = { id: randomUUID(), ...providerInput(req.body || {}, null, store, providerOptions(req)) };
@@ -434,6 +557,7 @@ app.put('/api/providers/:id', (req, res) => {
   if (state.activeProviderId === profile.id && !next.model) state.activeProviderId = null;
   if (!next.model || next.baseUrl !== profile.baseUrl || next.model !== profile.model || next.type !== profile.type) profile.premiumShared = false;
   if (state.captions.providerId === profile.id && !compatibleProvider(next)) state.captions = { providerId: null, model: '' };
+  if (['type', 'baseUrl', 'model', 'apiKey'].some((key) => profile[key] !== next[key])) profile.revision = randomUUID();
   Object.assign(profile, next);
   store.save();
   res.json(publicProviderFor(profile));

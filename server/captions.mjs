@@ -24,6 +24,14 @@ function motion({ animation, exitAnimation }, duration, width, height, marginBot
   } else if (animation === 'rise') {
     const x = Math.round(width / 2), y = height - marginBottom;
     tags += `\\move(${x},${y + Math.round(height * .024)},${x},${y},0,${Math.min(210, Math.round(duration * .45))})`;
+  } else if (['wave', 'rotate', 'flicker'].includes(animation)) {
+    const mid = Math.min(140, Math.round(duration * .24)), end = Math.min(350, Math.round(duration * .53));
+    if (animation === 'wave') tags += `\\fscx104\\fscy76\\t(0,${mid},\\fscx96\\fscy110)\\t(${mid},${end},\\fscx100\\fscy100)`;
+    if (animation === 'rotate') tags += `\\frz-9\\fscx88\\fscy88\\t(0,${mid},\\frz4\\fscx104\\fscy104)\\t(${mid},${end},\\frz0\\fscx100\\fscy100)`;
+    if (animation === 'flicker') {
+      const first = Math.round(mid / 3);
+      tags += `\\alpha&H98&\\fscx108\\t(0,${first},\\alpha&H00&)\\t(${first},${mid},\\alpha&H58&\\fscx97)\\t(${mid},${end},\\alpha&H00&\\fscx100)`;
+    }
   }
   if (exitAnimation === 'shrink') {
     const start = duration - Math.min(210, Math.round(duration * .28));
@@ -54,8 +62,8 @@ export function makeAss(rows, { width = 720, height = 1280 } = {}, language, sty
   const face = captionFontFamily(style, language);
   const effect = captionEffects[style.effect];
   const highlight = style.animation === 'highlight';
-  const primary = highlight ? highlightColor : effect.color;
-  const secondary = highlight ? highlightRestColor : effect.color;
+  const primary = highlight ? effect.highlight || highlightColor : effect.color;
+  const secondary = highlight ? effect.rest || highlightRestColor : effect.color;
   const size = Math.max(16, Math.round(Math.min(width, height) * captionSizes[style.size].scale));
   const margin = Math.round(width * .08);
   const bottom = Math.round(height * captionBottom(width, height));

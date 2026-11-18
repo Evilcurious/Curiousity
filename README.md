@@ -1,6 +1,6 @@
 # Curiousity
 
-Curiousity is a self-hosted studio for turning YouTube videos and livestreams you have permission to use into shareable H.264 clips. Preview and download MP4s and SRT subtitles, use private AI and delivery connections, and reuse clips that other members have shared. **Try demo** runs a full export without YouTube or an API key.
+Curiousity is a self-hosted studio for turning YouTube videos and livestreams you have permission to use into shareable H.264 clips. Preview and download MP4s and SRT subtitles, use private AI and delivery connections, and reuse clips that other members have shared. **Captions** subtitles videos from your device, and **Chat** uses your own saved AI profiles. **Try demo** runs a full export without YouTube or an API key.
 
 ## Run locally
 
@@ -40,7 +40,7 @@ ADMIN_EMAIL='admin@example.com' npm run admin -- --generate
 
 To change your password in the app, go to **Settings → Account → Change password**. Enter the current password and confirm a new one. This signs out every session for your account; sign in again with the new password.
 
-If upgrading a clone on this branch, stop the running server, back up as above, run `git pull --ff-only origin arena/e2b88358-curiousity`, then `npm ci`, `npm run setup`, the admin command, and restart. On a normal startup after provisioning, **no admin password environment variable is needed**.
+If upgrading a clone on this branch, stop the running server, back up as above, run `git pull --ff-only origin arena/e2b88358-curiousity`, then `npm ci`, `npm run build`, and restart the same service. Run `npm run setup` if media tools need updating. Keep the same data directory; provision an administrator only if you don’t already have one. On a normal startup after provisioning, **no admin password environment variable is needed**.
 
 ## Run on a VPS or with Compose
 
@@ -75,6 +75,15 @@ location / {
 ```
 
 Run `sudo nginx -t && sudo systemctl reload nginx` after editing. The snippet preserves the hostname and **overwrites** `X-Forwarded-Proto` with `$scheme`. Restart Curiousity after changing `.env` or its service environment.
+
+**Large device-video uploads.** Install or update both Nginx snippets from the checkout:
+
+```sh
+sudo install -m 0644 deploy/nginx-curiousity.conf /etc/nginx/snippets/curiousity-proxy.conf
+sudo install -m 0644 deploy/nginx-caption-upload.conf /etc/nginx/snippets/curiousity-caption-upload.conf
+```
+
+In the same HTTPS `server { … }`, add `include /etc/nginx/snippets/curiousity-caption-upload.conf;` **alongside** `location /`, not inside it. Then validate and reload Nginx as above. This disables Nginx’s body-size cap and request buffering **only** for `/api/captions/upload`; it does not change limits on other routes. The proxy snippet also gives model replies more than the default 60 seconds. Caddy’s `reverse_proxy` streams incoming uploads by default; don’t add a request-size cap to this route if you want uncapped uploads. A CDN, hosting plan, or another proxy can still reject large or slow transfers. If it does, use a directly reachable TLS hostname or a private SSH tunnel instead. Git updates do not change the running proxy or restart the service.
 
 If sign-in still reports an HTTPS error, check the public route without submitting a password:
 
@@ -114,7 +123,7 @@ ssh -N -L 127.0.0.1:5173:127.0.0.1:5173 your-user@VPS_IP
 
 Keep the tunnel open and visit <http://localhost:5173> in your browser. The HTTP connection only runs on loopback at both ends; traffic between your computer and the VPS is encrypted by SSH. If you use Compose without a public proxy, start it with `docker compose up -d` (no HTTPS overlay). This option is for private access, not for public Buffer media links or external HTTPS OAuth callbacks.
 
-Use one app process per data directory. Back up `.clipforge/` (or `DATA_DIR` / the Docker `/data` volume) **including `.key`**. The key lives alongside encrypted integration credentials; protect access to both, and to `.env` and backups. `MAX_SOURCE_MINUTES` defaults to 180 and `MAX_SOURCE_MB` to 2048. Temporary working media is removed after a job; delete old projects to reclaim export space. Saved library copies keep their media even after the original is removed.
+Use one app process per data directory. Back up `.clipforge/` (or `DATA_DIR` / the Docker `/data` volume) **including `.key`**. The key lives alongside encrypted integration credentials; protect access to both, and to `.env` and backups. For YouTube imports, `MAX_SOURCE_MINUTES` defaults to 180 and `MAX_SOURCE_MB` to 2048. Temporary working media is removed after a job; delete old projects to reclaim export space. Saved library copies keep their media even after the original is removed.
 
 ## Accounts, themes, and the Clip Library
 
@@ -139,11 +148,25 @@ Use one app process per data directory. Back up `.clipforge/` (or `DATA_DIR` / t
 - **Hashtag language** is separate. Choose a language, **Match source**, or **Off**. Each clip shows copyable suggestions, using local terms and transcript keywords when available in that language. If the source language is unknown or unsupported for tags, **Match source** uses English. Tags aren't claims about what is trending; review them before posting.
 - Burning subtitles into the MP4 needs FFmpeg with `libass`. [DejaVu sans, serif and mono](server/assets/DEJAVU-FONTS-LICENSE.txt) are bundled for Latin-script styles. Curiousity uses bundled [Noto fonts](server/assets/NOTO-FONTS-LICENSE.txt) for Arabic/Urdu script, Hindi, and Bengali so the text remains readable. Install fonts for other scripts on the host as needed, e.g. `fonts-noto-cjk` for Chinese, Japanese, and Korean on Debian/Ubuntu. If a font is missing or FFmpeg lacks `libass`, the SRT still contains the caption text.
 
+## Caption a video from your device
+
+1. Open **Captions** and choose or drop an MP4, MOV, WebM, MKV, or AVI with speech. No YouTube link, Google connection, or Premium account is needed. Some formats can render on the server even if they don’t play in the file preview.
+2. Pick a look from **Caption styles** or choose **Customize** for font, size, effect, and motion. The 13 presets include Orange, Clear Green, Wave, VHS, Text Spotlight, Dynamic Rotating, and Fresh Mint. Presets also appear in Studio’s caption-style dialog.
+3. Click **Generate captions**. The server transcribes speech in its original language and renders a full-length MP4 with styled captions. Download the MP4 or the plain-text **SRT**. The rendered video is the exact preview; the style sample is an approximation. To change a finished look, pick a new style and click **Render style**. This reuses the upload and the saved transcript, without another transcription call.
+
+The default engine is **Local Whisper**. To send audio instead to a compatible timestamped transcription service, choose your own **Caption engine** in **Settings → AI providers**. The service receives audio only, in chunks, and its costs and limits apply. FFmpeg with `libass` is needed for a styled MP4; the SRT can still be generated without it. Device exports retain the display aspect ratio (scaled down to at most 1920 pixels on the long edge). These projects are private and separate from the Clip Library and publishing integrations.
+
+**No fixed app upload size cap** applies to this route. Files stream to disk; YouTube’s download limits do not apply. Uploads stop if the volume runs low on free space (128 MiB reserved). Allow room for the original, working audio, and render copies during a style change. The original stays on the server so you can re-render until you delete the project. Cancelled or invalid uploads without a transcript are cleaned up. The same media queue handles both device captions and YouTube projects; uploads have an idle timeout. `CAPTION_TASK_MINUTES` (default 240) bounds each audio preparation/transcription/render stage, not the upload size. Actual storage, CPU, proxy, browser, and speech-service limits still apply. Limit registration to trusted users on a shared server.
+
 ## AI providers
 
-In **Settings → AI Providers → Add provider**, save a named profile for each key, model or endpoint. There is no fixed profile count limit, and you can save several profiles for the same service. Search or filter the list to find them. Presets cover OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, DeepSeek, Mistral AI, xAI, Fireworks AI, Cerebras, NVIDIA NIM, Ollama, and LM Studio, plus a custom OpenAI-compatible endpoint. Use **Fetch models** or type a supported chat model ID directly. Choose **Use model** to set your default chat model, or choose a profile under **AI engine** in Studio to override it for that project’s highlight ranking and caption translation. Local analysis needs no key and is used when a remote ranker fails.
+Any signed-in member can use **Settings → AI providers → Add provider** to save a personal profile for each key, model or endpoint. Premium is not needed to save, discover, or use personal models. There is no fixed profile count limit, and you can save several profiles for the same service. Search or filter the list to find them. Presets cover OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, DeepSeek, Mistral AI, xAI, Fireworks AI, Cerebras, NVIDIA NIM, Ollama, and LM Studio, plus a custom OpenAI-compatible endpoint. Use **Fetch models** or type a supported chat model ID directly. Choose **Use model** to set your default chat model, or choose a profile under **AI engine** in Studio to override it for that project’s highlight ranking and caption translation. Local analysis needs no key and is used when a remote ranker fails.
 
-Select a separate **Caption engine** for transcription if desired. A remote transcription profile must support `/audio/transcriptions` with timestamped `verbose_json` segments, like OpenAI `whisper-1`. Member endpoints must use public HTTPS on port 443 and include the provider’s API path (often `/v1`). Only the host administrator can configure a loopback AI endpoint, such as LM Studio or Ollama on the server; the browser never calls it directly. Private and reserved addresses and redirects are blocked on outbound member connections. API keys are encrypted at rest; a saved key isn’t reused when an editable endpoint changes. External providers receive excerpts, cues, or audio as appropriate and may charge for usage. Keep Local analysis and Local Whisper selected to avoid sending this material to AI providers.
+Select a separate **Caption engine** for transcription if desired. A remote transcription profile must support `/audio/transcriptions` with timestamped `verbose_json` segments, like OpenAI `whisper-1`. Member custom endpoints must use public HTTPS reachable from the VPS, including their API path (often `/v1`). Explicit HTTPS ports are supported. Pasting an OpenAI-compatible operation URL such as `/v1/chat/completions` uses its API base `/v1`. To connect Ollama or LM Studio as a member, provide a public HTTPS endpoint you control and secure it with authentication; `localhost` would refer to the VPS, not your device. Only the host administrator can set up a loopback AI service on the VPS. The browser never calls these endpoints directly. Private and reserved addresses and redirects are blocked on outbound member connections. API keys are encrypted at rest; a saved key isn’t reused when an editable endpoint changes. External providers receive excerpts, cues, or audio as appropriate and may charge for usage. Keep Local analysis and Local Whisper selected to avoid sending this material to AI providers.
+
+### Chat with a saved model
+
+Open **Chat** and choose a personal profile with a chat model ID. Send a message and follow up in the same conversation. Curiousity forwards recent text turns to the selected model with your server-side credential; it does not save conversations to disk. Reloading the page, signing out, starting a new chat, or switching profiles clears the conversation in that tab. Provider data and billing policies apply. Chat cannot invoke MCP tools or read your projects. Admin-shared profiles remain a Premium feature in Studio, not a source of personal credentials or Chat access.
 
 ### Premium AI
 
@@ -162,7 +185,7 @@ Open **Settings → Integrations** for destination accounts, or **Settings → M
 
 ### Custom MCP servers
 
-Choose **Add MCP server**, give it a name, and enter a public `https://…` Streamable HTTP endpoint and optional bearer token. **Discover tools** shows the tool catalog. Select a tool, check its JSON schema, enter the arguments as a JSON object, and approve each call. This supports JSON and SSE responses from Streamable HTTP servers, not old SSE-only transports, local commands/stdio, or browser OAuth for arbitrary MCP servers. Tool calls are manual; AI models cannot invoke them or read their results. Use servers you trust: approved tools may read or change data in the remote account.
+Any member can choose **Add MCP server** and enter a public `https://…` Streamable HTTP endpoint (including an explicit HTTPS port if needed) and optional bearer token, with or without the `Bearer` prefix. A friendly name is optional. The URL must be reachable from the VPS; localhost, private IPs, and redirects are blocked. **Discover tools** shows the tool catalog. Select a tool, check its JSON schema, enter the arguments as a JSON object, and approve each call. This supports JSON and SSE responses from Streamable HTTP servers, not old SSE-only transports, local commands/stdio, or browser OAuth for arbitrary MCP servers. Tool calls are manual; AI models cannot invoke them or read their results. Use servers you trust: approved tools may read or change data in the remote account.
 
 ### Google Drive and YouTube
 
@@ -188,4 +211,4 @@ npm test
 npm run build
 ```
 
-The suite covers cookie sessions and legacy admin migration, account isolation, Premium authorization, shared video downloads and reusable copies, and Streamable HTTP/Buffer behavior against mock responses. It also renders real MP4s with FFmpeg, checks frame dimensions and caption pixels, records local HLS/DASH fixtures, and tests Google and TikTok flows with mocks. It does not contact real YouTube broadcasts or social accounts.
+The suite covers cookie sessions and legacy admin migration, account isolation, Premium authorization, shared video downloads and reusable copies, personal model chat and discovery, and Streamable HTTP/Buffer behavior against mock responses. It also tests streamed device uploads and re-styling and renders real MP4s with FFmpeg, checks frame dimensions and caption pixels, records local HLS/DASH fixtures, and tests Google and TikTok flows with mocks. It does not contact real YouTube broadcasts or social accounts.

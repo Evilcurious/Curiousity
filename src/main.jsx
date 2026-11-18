@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertCircle, BookOpen, Check, ChevronRight, Clapperboard, Crown, FolderOpen, LoaderCircle, Menu, Palette, PanelTop, Settings, Shield, X } from 'lucide-react';
+import { AlertCircle, BookOpen, Captions, Check, ChevronRight, Clapperboard, Crown, FolderOpen, LoaderCircle, Menu, MessageSquare, Palette, PanelTop, Settings, Shield, X } from 'lucide-react';
 import '@fontsource/manrope/latin-500.css';
 import '@fontsource/manrope/latin-600.css';
 import '@fontsource/manrope/latin-700.css';
@@ -20,9 +20,12 @@ import { McpSettings } from './mcp.jsx';
 import { applyBrand, Wordmark } from './brand.jsx';
 import Access from './auth.jsx';
 import { TemporaryPasswordSettings } from './password-settings.jsx';
+import CaptionsPage from './captions-page.jsx';
+import ChatPage from './chat-page.jsx';
 
 const navigation = [
   { id: 'studio', label: 'Clip Studio', icon: Clapperboard }, { id: 'library', label: 'Clip Library', icon: FolderOpen },
+  { id: 'captions', label: 'Captions', icon: Captions }, { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 function readRoute() {
@@ -32,7 +35,7 @@ function readRoute() {
   if (page === 'project' && id) return { page, id };
   if (page === 'settings' || page === 'providers' || page === 'integrations') return { page: 'settings', tab: page === 'settings' ? sections.find((section) => section.id === id)?.id : page, notice: params.get('notice'), preset: params.get('preset') };
   if (page === 'library') return { page, shared: id === 'shared' };
-  return { page: page === 'setup' ? 'setup' : 'studio' };
+  return { page: ['setup', 'captions', 'chat'].includes(page) ? page : 'studio' };
 }
 
 function App() {
@@ -190,6 +193,8 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         {route.page === 'library' && <Library shared={route.shared} user={user} projects={projects} loading={!projectsLoaded} error={projectsError} createProject={createProject} openProject={openProject} notify={notify}/>}
         {route.page === 'project' && <Project key={route.id} job={current} loading={!projectsLoaded} loadError={projectsError} workspace={workspace} createProject={createProject} updateProject={updateProject} removeProject={removeProject} notify={notify}/>}
         {route.page === 'settings' && <><SettingsTabs tab={route.tab} user={user}/>{settings()}</>}
+        {route.page === 'captions' && <CaptionsPage workspace={workspace} notify={notify}/>}
+        <div hidden={route.page !== 'chat'}><ChatPage workspace={workspace}/></div>
         {route.page === 'setup' && <Setup workspace={workspace} refresh={refresh} notify={notify}/>}
       </main>
     </div>

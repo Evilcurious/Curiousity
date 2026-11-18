@@ -14,14 +14,14 @@ export function isPublicAddress(value) {
 const local = new Set(['localhost', '127.0.0.1', '[::1]']);
 const hostnameOf = (url) => url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
 
-export function externalUrl(raw, { allowLocal = false, allowQuery = false } = {}) {
+export function externalUrl(raw, { allowLocal = false, allowQuery = false, allowPort = false } = {}) {
   let url;
   try { url = new URL(raw); } catch { /* Report a validation error below. */ }
   if (!url || url.username || url.password || url.hash || (!allowQuery && url.search)) throw new HttpError(400, 'Enter an HTTPS URL without credentials or a fragment.');
   if (allowLocal && local.has(url.hostname) && ['http:', 'https:'].includes(url.protocol)) return url;
   const host = hostnameOf(url);
-  if (url.protocol !== 'https:' || url.port || (ipaddr.isValid(host) ? !isPublicAddress(host) : !host.includes('.') || /(?:^|\.)(localhost|local|internal|home|lan|onion|intranet)$/.test(host))) {
-    throw new HttpError(400, 'Use a public HTTPS endpoint. Only the host administrator may use a loopback AI service.');
+  if (url.protocol !== 'https:' || (!allowPort && url.port) || (ipaddr.isValid(host) ? !isPublicAddress(host) : !host.includes('.') || /(?:^|\.)(localhost|local|internal|home|lan|onion|intranet)$/.test(host))) {
+    throw new HttpError(400, 'Use a public HTTPS endpoint reachable from this server. Private networks and localhost are not allowed here.');
   }
   return url;
 }
@@ -41,8 +41,8 @@ export function safeResolver(hostname, options, done, resolve = lookup) {
 }
 
 const dispatcher = new Agent({ connect: { lookup: safeResolver, timeout: 7000 }, connections: 3, keepAliveTimeout: 5000 });
-export function guardedFetch(input, options, { allowLocal = false, allowQuery = false } = {}) {
-  const url = externalUrl(input, { allowLocal, allowQuery });
+export function guardedFetch(input, options, { allowLocal = false, allowQuery = false, allowPort = false } = {}) {
+  const url = externalUrl(input, { allowLocal, allowQuery, allowPort });
   return fetch(url.href, { ...options, redirect: 'error', ...(allowLocal && local.has(url.hostname) ? {} : { dispatcher }) });
 }
 

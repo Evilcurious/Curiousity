@@ -1,7 +1,21 @@
 import { createHash } from 'node:crypto';
-import { canUsePremium } from './accounts.mjs';
+import { canUsePremium, emptyWorkspace } from './accounts.mjs';
 import { defaultTheme, hasTheme } from '../shared/themes.mjs';
 import { HttpError } from './validation.mjs';
+
+// Accounts created before connections were introduced may be missing some
+// fields. Fill in only absent settings; never adopt another account's data.
+export function repairWorkspace(account) {
+  if (!account.workspace) { account.workspace = emptyWorkspace(); return true; }
+  let changed = false;
+  for (const [key, fallback] of Object.entries(emptyWorkspace())) {
+    if (!Object.hasOwn(account.workspace, key) || (account.workspace[key] === null && fallback !== null)) {
+      account.workspace[key] = fallback;
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 export function sharedProviders(store, account) {
   if (!canUsePremium(account)) return [];

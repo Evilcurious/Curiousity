@@ -12,11 +12,12 @@ function ProviderDialog({ existing, onClose, onSaved, allowLocal }) {
   const [showKey, setShowKey] = useState(false), [models, setModels] = useState(null), [busy, setBusy] = useState(''), [error, setError] = useState('');
   const definition = providers[fields.type];
   const configurable = definition.editableUrl;
+  const initialUrl = (type) => allowLocal || !providers[type].baseUrl.startsWith('http://') ? providers[type].baseUrl : '';
   const keepsKey = existing?.hasKey && existing.type === fields.type && (!configurable || fields.baseUrl.trim().replace(/\/$/, '') === existing.baseUrl);
   const set = (key, value) => setFields((state) => ({ ...state, [key]: value }));
   function setType(type) {
     setModels(null); setError('');
-    setFields((state) => ({ ...state, type, baseUrl: providers[type].baseUrl, model: providers[type].model || '', apiKey: '' }));
+    setFields((state) => ({ ...state, type, baseUrl: initialUrl(type), model: providers[type].model || '', apiKey: '' }));
   }
   async function submit(action) {
     setBusy(action); setError('');
@@ -35,7 +36,7 @@ function ProviderDialog({ existing, onClose, onSaved, allowLocal }) {
   return <Modal title={existing ? 'Edit provider' : 'Add an AI provider'} subtitle="Save a named profile with its own API key and model. Add more profiles for other keys, models or servers—even from the same provider." onClose={onClose}>
     <form className="modal-form" onSubmit={(event) => { event.preventDefault(); submit('save'); }}>
       <div className="form-pair"><Field label="Provider"><Select value={fields.type} onChange={(event) => setType(event.target.value)}>{Object.entries(providers).map(([key, val]) => <option key={key} value={key}>{val.name}</option>)}</Select></Field><Field label="Profile name"><input value={fields.name} maxLength={60} onChange={(event) => set('name', event.target.value)} placeholder={definition.name}/></Field></div>
-      {configurable && <Field label="API base URL" hint={allowLocal ? 'Use public HTTPS or a loopback AI server on this host. Include the API path (e.g. /v1).' : 'Use a public HTTPS endpoint with its API path (e.g. /v1). Changing the address does not reuse the saved key.'}><input type="url" value={fields.baseUrl} onChange={(event) => { set('baseUrl', event.target.value); setModels(null); }} placeholder="https://example.com/v1" required={fields.type === 'custom'}/></Field>}
+      {configurable && <Field label="API base URL" hint={allowLocal ? 'Use public HTTPS or a loopback AI server on this host. Include the API path (e.g. /v1).' : 'Use your public HTTPS API address (such as https://ai.example.com/v1). A server on your device must be reachable from this VPS. Changing the address does not reuse the saved key.'}><input type="url" value={fields.baseUrl} onChange={(event) => { set('baseUrl', event.target.value); setModels(null); }} placeholder="https://example.com/v1" required={!allowLocal || fields.type === 'custom'}/></Field>}
       <Field label={definition.optionalKey ? 'API key (optional)' : 'API key'} hint="Keys are encrypted on the server and never returned to the browser."><PasswordInput noun="key" show={showKey} onToggle={() => setShowKey(!showKey)} value={fields.apiKey} onChange={(event) => { set('apiKey', event.target.value); setModels(null); }} placeholder={keepsKey ? 'Leave blank to keep the saved key' : 'Paste your API key'}/></Field>
       <div className="model-field"><Field label="Chat model ID" hint="Enter a model manually or fetch the provider’s catalog."><input value={fields.model} maxLength={160} onChange={(event) => set('model', event.target.value)} placeholder="Model ID" spellCheck="false"/></Field><Button onClick={() => submit('models')} busy={busy === 'models'} disabled={busy === 'save'} icon={RefreshCw}>Fetch models</Button></div>
       {models && (models.length ? <Field label="Available models"><Select value={models.includes(fields.model) ? fields.model : ''} onChange={(event) => { if (event.target.value) set('model', event.target.value); }}><option value="">Choose a model</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field> : <Banner tone="warning" icon={CircleHelp}>No models were listed. You can still enter a model ID manually.</Banner>)}
@@ -68,7 +69,7 @@ export function Providers({ user, workspace, refresh, notify }) {
   }
   const activate = (id) => run(id || 'local', () => api('/settings/ranking', { method: 'PUT', body: { providerId: id } }), id ? 'Highlight model updated.' : 'Switched to local analysis.');
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Add your own API keys and models. Choose your default here or select a different chat model in the Clip Studio."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
+    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Add your own API keys and models, with or without Premium. Use your saved models in Chat or choose a default for highlight analysis."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
     <div className="panel feature-panel ranking-banner"><Glyph icon={Sparkles}/><div><p className="eyebrow">YOUR DEFAULT HIGHLIGHT MODEL</p><h2>{active?.name || 'Local analysis'}</h2><p>{active ? active.model : 'Scores transcript cues, audio activity, and replay data when available. No API key required.'}</p></div>{active ? <Button icon={Cpu} busy={busy === 'local'} onClick={() => activate(null)}>Use local analysis</Button> : <span className="badge badge-green"><i/>Active</span>}</div>
     <div className="section-heading settings-section-title"><h2>Your provider profiles</h2><span className="muted">{profiles.length} saved</span></div>
     {profiles.length > 0 && <div className="profiles-toolbar">

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { HttpError, text } from './validation.mjs';
 import { languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { providerCatalog } from '../shared/providers.mjs';
+import { chatLimits } from '../shared/chat.mjs';
 import { isLatinCaption } from './roman-urdu.mjs';
 import { boundedText, externalUrl, guardedFetch } from './outbound.mjs';
 
@@ -9,17 +10,19 @@ export function providerInput(body, existing, store, { allowLocal = true } = {})
   const type = text(body.type, 24);
   if (!Object.hasOwn(providerCatalog, type)) throw new HttpError(400, 'Select a supported provider.');
   const definition = providerCatalog[type];
-  const name = text(body.name, 60);
-  if (!name) throw new HttpError(400, 'Give this profile a name.');
+  const name = text(body.name, 60) || definition.name;
   const model = text(body.model, 160);
-  const supplied = text(body.apiKey, 4000);
+  const supplied = text(body.apiKey, 4000).replace(/^Bearer +/i, '');
   if (/[\s\u0000-\u001f]/.test(supplied)) throw new HttpError(400, 'API keys cannot contain whitespace.');
   const configurable = definition.editableUrl;
   const rawBase = (configurable ? text(body.baseUrl, 500) : '') || definition.baseUrl;
   let url;
   try { url = new URL(rawBase); } catch { throw new HttpError(400, 'Enter a valid API base URL, such as https://example.com/v1.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new HttpError(400, 'Use a plain HTTP(S) API URL without credentials, queries, or fragments.');
-  if (configurable) externalUrl(url.href, { allowLocal });
+  if (configurable) {
+    externalUrl(url.href, { allowLocal, allowPort: true });
+    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/(?:chat\/completions|audio\/transcriptions|models)$/, '') || '/';
+  }
   const baseUrl = url.toString().replace(/\/$/, '');
   const savedKey = existing?.type === type && existing.baseUrl === baseUrl ? existing.apiKey : '';
   const apiKey = body.clearKey === true ? '' : supplied ? store.seal(supplied) : savedKey;
@@ -49,13 +52,14 @@ async function request(profile, store, route, { body, signal, timeout = 25_000 }
       headers, method: body === undefined ? 'GET' : 'POST',
       body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
-    }, { allowLocal: providerCatalog[profile.type].editableUrl === true, allowQuery: true });
+    }, { allowLocal: providerCatalog[profile.type].editableUrl === true, allowPort: true, allowQuery: true });
   } catch (error) {
     if (signal?.aborted) throw signal.reason;
     throw new HttpError(502, 'Could not reach the provider. Check its address and network access.');
   }
   if (!res.ok) {
     res.body?.cancel().catch(() => {});
+    if (route.startsWith('/models') && body === undefined && [404, 405, 501].includes(res.status)) throw new HttpError(502, 'The provider did not list models at this API address. Check the base URL or enter a model ID manually.');
     throw new HttpError(502, `Provider returned HTTP ${res.status}. Check the key, permissions, and model name.`);
   }
   try { return JSON.parse(await boundedText(res, 2 * 1024 * 1024)); } catch (error) { if (signal?.aborted) throw signal.reason; if (error instanceof HttpError) throw error; throw new HttpError(502, 'The provider did not return a valid API response.'); }
@@ -64,9 +68,35 @@ async function request(profile, store, route, { body, signal, timeout = 25_000 }
 export async function listModels(profile, store) {
   const gemini = profile.type === 'gemini';
   const body = await request(profile, store, gemini ? '/models?pageSize=100' : '/models');
-  const names = (gemini ? body.models || [] : body.data || []).filter((row) => !gemini || row.supportedGenerationMethods?.includes('generateContent'))
-    .map((row) => gemini ? row.name?.replace(/^models\//, '') : row.id).filter((name) => typeof name === 'string' && name.length <= 160);
+  const rows = gemini ? body?.models : body?.data;
+  const names = (Array.isArray(rows) ? rows : []).filter((row) => row && (!gemini || row.supportedGenerationMethods?.includes?.('generateContent')))
+    .map((row) => gemini && typeof row.name === 'string' ? row.name.replace(/^models\//, '') : row.id).filter((name) => typeof name === 'string' && name.length <= 160);
   return [...new Set(names)].sort();
+}
+
+const chatParts = (parts) => Array.isArray(parts) ? parts.filter((part) => typeof part?.text === 'string' && (part.type === undefined || part.type === 'text') && !part.thought).map((part) => part.text).join('\n') : '';
+
+export async function chatWithProvider(profile, store, messages, signal) {
+  const kind = providerCatalog[profile.type].kind;
+  const timeout = 85_000;
+  let output;
+  if (kind === 'anthropic') {
+    const result = await request(profile, store, '/messages', { body: { model: profile.model, messages, max_tokens: 2048 }, signal, timeout });
+    output = chatParts(result?.content);
+  } else if (kind === 'gemini') {
+    const contents = messages.map(({ role, content }) => ({ role: role === 'assistant' ? 'model' : 'user', parts: [{ text: content }] }));
+    const result = await request(profile, store, `/models/${encodeURIComponent(profile.model.replace(/^models\//, ''))}:generateContent`, { body: { contents, generationConfig: { maxOutputTokens: 2048 } }, signal, timeout });
+    output = chatParts(result?.candidates?.[0]?.content?.parts);
+  } else {
+    const limit = profile.type === 'openai' ? { max_completion_tokens: 2048 } : { max_tokens: 2048 };
+    const result = await request(profile, store, '/chat/completions', { body: { model: profile.model, messages, ...limit }, signal, timeout });
+    const content = result?.choices?.[0]?.message?.content;
+    output = typeof content === 'string' ? content : chatParts(content);
+  }
+  if (!output.trim()) throw new HttpError(502, 'The model did not return a text reply. Choose a chat-capable model and try again.');
+  const key = store.unseal(profile.apiKey);
+  const safe = (key ? output.replaceAll(key, '[redacted]') : output).trim();
+  return { reply: safe.slice(0, chatLimits.assistant).replace(/[\uD800-\uDBFF]$/, ''), truncated: safe.length > chatLimits.assistant };
 }
 
 async function structuredChat(profile, store, instruction, prompt, signal) {

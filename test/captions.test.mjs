@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { makeAss, makeSrt } from '../server/captions.mjs';
 import { ffmpeg, ROOT, run, toolsStatus } from '../server/tools.mjs';
 import { jobOptions } from '../server/validation.mjs';
-import { defaultCaptionStyle } from '../shared/captions.mjs';
+import { captionPresets, defaultCaptionStyle, matchingPreset } from '../shared/captions.mjs';
 
 const rows = [{ start: 0, end: 2, text: 'Yeh aik achhi baat hai.' }];
 const frame = { width: 720, height: 1280 };
@@ -27,6 +27,15 @@ test('whitelists style options, uses script-specific fonts and keeps SRT plain t
   const urdu = [{ ...rows[0], text: 'یہ ایک اچھی بات ہے۔' }];
   assert.match(makeAss(urdu, frame, 'ur', style), /Style: Default,Noto Sans Arabic,52,/);
   assert.equal(makeSrt(rows), '1\n00:00:00,000 --> 00:00:02,000\nYeh aik achhi baat hai.\n');
+});
+
+test('the 13 device-video presets share the Clip Studio validation and ASS renderer', () => {
+  assert.equal(Object.keys(captionPresets).length, 13);
+  for (const [id, preset] of Object.entries(captionPresets)) {
+    const { captionStyle } = jobOptions({ demo: true, count: 1, captionStyle: preset.style });
+    assert.equal(matchingPreset(captionStyle), id);
+    assert.match(makeAss(rows, frame, 'en', captionStyle), /Dialogue: 0,/);
+  }
 });
 
 test('FFmpeg renders visible font effects and changes pixels during caption entrance, cue and exit', { timeout: 25_000 }, async (t) => {
@@ -71,4 +80,10 @@ test('FFmpeg renders visible font effects and changes pixels during caption entr
   assert.ok(rise(0).y > rise(20).y + 3);
   const highlight = await render({ animation: 'highlight' });
   assert.ok(highlight(32).lime > highlight(0).lime * 3);
+  const wave = await render(captionPresets.wave.style);
+  assert.ok(wave(0).bright < wave(20).bright * .9, 'Wave has a compressed first frame');
+  const rotate = await render(captionPresets.rotating.style);
+  assert.ok(rotate(0).bright < rotate(20).bright * .92, 'Rotate starts with smaller, rotated glyphs');
+  const flicker = await render(captionPresets.vhs.style);
+  assert.ok(flicker(0).light < flicker(20).light * .7, 'Tape flicker affects the rendered frame');
 });
