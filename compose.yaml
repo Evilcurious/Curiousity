@@ -1,13 +1,16 @@
 services:
-  clipforge:
+  curiousity:
     build: .
     init: true
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${CLIPFORGE_PORT:-5173}:5173"
+      - "127.0.0.1:${CURIOUSITY_PORT:-${CLIPFORGE_PORT:-5173}}:5173"
     environment:
-      AUTH_USER: ${AUTH_USER:-clipforge}
-      AUTH_PASSWORD: ${AUTH_PASSWORD:?Set AUTH_PASSWORD in .env before starting Clipforge}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      PREMIUM_DAILY_JOBS: ${PREMIUM_DAILY_JOBS:-10}
       MAX_SOURCE_MINUTES: ${MAX_SOURCE_MINUTES:-180}
       MAX_SOURCE_MB: ${MAX_SOURCE_MB:-2048}
       WHISPER_MODEL: ${WHISPER_MODEL:-base}

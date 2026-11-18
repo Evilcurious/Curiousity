@@ -27,7 +27,7 @@ export default function CaptionAppearance({ value, frame, language, canBurn, onC
   const highlighting = style.animation === 'highlight';
   const previewVars = {
     '--sample-ratio': ratio, '--sample-width': `${maxWidth}px`, '--sample-bottom': `${captionBottom(frame.width, frame.height) * 100}%`,
-    '--sample-font': `"Clipforge ${captionFontFamily(style, language)}", sans-serif`,
+    '--sample-font': `"Curiousity ${captionFontFamily(style, language)}", sans-serif`,
     '--sample-size': `${Math.max(11, Math.min(maxWidth, maxWidth / ratio) * captionSizes[style.size].scale * 1.5)}px`,
     '--sample-color': highlighting ? highlightRestColor : effect.color, '--sample-highlight': highlightColor,
     '--sample-edge': effect.edge, '--sample-stroke': `${effect.box ? 0 : effect.outline / 2.5}px`,

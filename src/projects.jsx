@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, ArrowRight, Captions, Check, ChevronDown, CircleAlert, Clapperboard, Clock3, Copy, Download, ExternalLink, Film, Hash, Info, LoaderCircle, Play, Plug, Plus, Radio, RefreshCw, Search, Sparkles, Square, Trash2, Upload } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowRight, Captions, Check, ChevronDown, CircleAlert, Clapperboard, Clock3, Copy, Download, ExternalLink, Film, Hash, Info, LoaderCircle, LockKeyhole, Play, Plug, Plus, Radio, RefreshCw, Search, Sparkles, Square, Trash2, Upload, Users } from 'lucide-react';
 import { ACTIVE, ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, JobBadge, Modal, PageHeading, POSTING, SHORT_DATE, STATES, TikTokIcon, timecode } from './ui.jsx';
 import { DemoRow, ProjectRow } from './studio.jsx';
 import { availableDestinations, clipRatio, clipUploading, GoogleDeliveryStatus, GoogleUploadReview } from './delivery.jsx';
 import { exportFrame, languageLabel, platforms } from '../shared/exports.mjs';
 import { captionScriptFont, captionStyleLabel } from '../shared/captions.mjs';
+import { LibraryShareReview, LibraryTabs, SharedLibrary } from './shared-library.jsx';
+import { BufferIcon } from './mcp.jsx';
+import { BufferReview, BufferStatus } from './buffer-review.jsx';
 
-export function Library({ projects, error, createProject, notify }) {
+export function Library({ projects, shared, user, loading, error, createProject, openProject, notify }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [busy, setBusy] = useState(false);
@@ -18,12 +21,15 @@ export function Library({ projects, error, createProject, notify }) {
     finally { setBusy(false); }
   }
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE" title="Clip library" subtitle="Review your projects, download clips, and track what’s ready to share."><ActionLink href="#/studio" icon={Plus} tone="primary">New project</ActionLink></PageHeading>
+    <PageHeading label="WORKSPACE / LIBRARY" title="Clip library" subtitle="Review your private projects or discover finished clips shared by workspace members."><ActionLink href="#/studio" icon={Plus} tone="primary">New project</ActionLink></PageHeading>
+    <LibraryTabs shared={shared}/>
+    {shared ? <SharedLibrary user={user} openProject={openProject} notify={notify}/> : <>
     {error && <Banner>{error}</Banner>}
-    {projects.length ? <>
+    {loading ? <div className="panel"><EmptyState icon={LoaderCircle} title="Loading projects…">Checking your private workspace.</EmptyState></div> : projects.length ? <>
       <div className="library-toolbar"><label className="search-field"><Search size={17}/><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects…" aria-label="Search projects"/></label><div className="select-wrap"><select aria-label="Filter projects by status" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All statuses</option><option value="ready">Ready</option><option value="active">In progress</option><option value="issues">Failed or stopped</option></select><ChevronDown size={14}/></div></div>
       <div className="project-list">{matching.length ? matching.map((project) => <ProjectRow project={project} key={project.id}/>) : <div className="panel"><EmptyState icon={Search} title="No matching projects" action={<Button onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</Button>}>Try another search or status.</EmptyState></div>}</div>
     </> : <><div className="panel"><EmptyState icon={Clapperboard} title="No projects yet" action={<ActionLink href="#/studio" icon={Plus}>Create a project</ActionLink>}>Clips you generate in the studio will appear here.</EmptyState></div><div className="library-sample"><DemoRow onDemo={demo} busy={busy}/></div></>}
+    </>}
   </div>;
 }
 
@@ -41,7 +47,7 @@ function Processing({ job, onCancel, onFinish, busy }) {
   </section>;
 }
 
-function ClipCard({ clip, index, onPlay, canShare, select, selected, onCheck, onGoogle, notify }) {
+function ClipCard({ clip, index, onPlay, canShare, select, selected, onCheck, onGoogle, onBuffer, notify }) {
   async function copyHashtags() {
     try { await navigator.clipboard.writeText(clip.hashtags.join(' ')); notify('Hashtags copied.'); }
     catch { notify('Select and copy the hashtags manually.'); }
@@ -57,9 +63,10 @@ function ClipCard({ clip, index, onPlay, canShare, select, selected, onCheck, on
         {clip.withCaptions && <span className="clip-caption-label"><Captions size={14}/>{languageLabel(clip.captionLanguage, 'Source language')} {clip.burnedCaptions ? 'captions' : 'SRT'}</span>}
         {!!clip.hashtags?.length && <div className="clip-hashtags"><div className="clip-tags-head"><span><Hash size={13}/>{languageLabel(clip.hashtagLanguage)} hashtags</span><button type="button" className="inline-action" onClick={copyHashtags} title="Copy hashtags" aria-label={`Copy hashtags for clip ${index + 1}`}><Copy size={13}/></button></div><div className="clip-tags" dir="auto">{clip.hashtags.join(' ')}</div></div>}
       </div>}
-      <div className="clip-actions"><ActionLink icon={Download} href={`${clip.videoUrl}?download=1`} download>MP4</ActionLink>{clip.captionsUrl && <ActionLink icon={Captions} href={`${clip.captionsUrl}?download=1`} download>SRT</ActionLink>}<Button icon={Play} onClick={onPlay}>Preview</Button>{onGoogle && <Button icon={Upload} onClick={onGoogle}>Send to…</Button>}</div>
+      <div className="clip-actions"><ActionLink icon={Download} href={`${clip.videoUrl}?download=1`} download>MP4</ActionLink>{clip.captionsUrl && <ActionLink icon={Captions} href={`${clip.captionsUrl}?download=1`} download>SRT</ActionLink>}<Button icon={Play} onClick={onPlay}>Preview</Button>{onGoogle && <Button icon={Upload} onClick={onGoogle}>Send to…</Button>}{onBuffer && <Button icon={BufferIcon} onClick={onBuffer}>Buffer draft</Button>}</div>
       {clip.tiktok && <div className={`clip-upload ${clip.tiktok.state === 'failed' ? 'upload-error' : ''}`}><TikTokIcon size={15}/><div><span>{POSTING[clip.tiktok.state]}</span>{clip.tiktok.reason && <p>{clip.tiktok.reason}</p>}</div>{clip.tiktok.canCheck && clip.tiktok.state === 'unconfirmed' && <button className="inline-action" type="button" onClick={onCheck}>Check</button>}</div>}
       <GoogleDeliveryStatus uploads={clip.googleUploads}/>
+      <BufferStatus draft={clip.bufferDraft}/>
       {canShare && (!clip.tiktok || clip.tiktok.state === 'failed') && <label className="clip-select"><input type="checkbox" checked={selected} onChange={(event) => select(event.target.checked)}/><span>Select for TikTok</span></label>}
     </div>
   </article>;
@@ -89,6 +96,7 @@ function ReviewUpload({ job, selected, tiktok, frame, onClose, onSent }) {
 export function Project({ job, loadError, loading, workspace, updateProject, removeProject, createProject, notify }) {
   const [preview, setPreview] = useState(null), [confirm, setConfirm] = useState(''), [busy, setBusy] = useState(''), [error, setError] = useState('');
   const [selected, setSelected] = useState(new Set()), [review, setReview] = useState(false), [googleReview, setGoogleReview] = useState(null);
+  const [bufferReview, setBufferReview] = useState(null), [libraryReview, setLibraryReview] = useState(false);
   const offered = useRef(null);
   useEffect(() => { setSelected(new Set()); setPreview(null); setReview(false); setGoogleReview(null); setConfirm(''); setError(''); }, [job?.id]);
   useEffect(() => {
@@ -96,7 +104,7 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
     setSelected(new Set(job.clips.filter((clip) => !clip.tiktok).map((clip) => clip.id)));
     offered.current = job.id;
   }, [job, workspace?.tiktok.connected]);
-  if (!job) return <><ActionLink icon={ArrowLeft} href="#/library">Clip library</ActionLink><div className="panel empty-project"><EmptyState icon={loading ? LoaderCircle : Film} title={loading ? 'Loading project…' : 'Project unavailable'}>{loadError || (loading ? 'Connecting to the Clipforge engine.' : 'This project may have been removed.')}</EmptyState></div></>;
+  if (!job) return <><ActionLink icon={ArrowLeft} href="#/library">Clip library</ActionLink><div className="panel empty-project"><EmptyState icon={loading ? LoaderCircle : Film} title={loading ? 'Loading project…' : 'Project unavailable'}>{loadError || (loading ? 'Connecting to the Curiousity engine.' : 'This project may have been removed.')}</EmptyState></div></>;
   const active = ACTIVE.has(job.status);
   const ready = job.status === 'ready';
   const canShare = ready && !job.options.demo && workspace?.tiktok.connected;
@@ -107,6 +115,8 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
   const styledLanguage = job.clips.find((clip) => clip.burnedCaptions)?.captionLanguage;
   const styleLabel = captionStyleLabel(captionScriptFont(styledLanguage) ? { ...job.options.captionStyle, font: 'auto' } : job.options.captionStyle);
   const google = workspace?.google;
+  const buffers = workspace?.mcps?.filter((profile) => profile.kind === 'buffer') || [];
+  const bufferClip = job.clips.find((clip) => clip.id === bufferReview);
   const clipToPlay = job.clips.find((clip) => clip.id === preview);
   const clipToSend = job.clips.find((clip) => clip.id === googleReview);
   const accountKey = google?.account ? `${google.account.id}:${google.grants.drive}:${google.grants.youtube}` : '';
@@ -117,7 +127,7 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
       if (action === 'delete') await removeProject(job.id);
       else if (action === 'retry') {
         const { aiProfile } = job.options;
-        const unavailable = workspace && aiProfile && !['local', 'workspace'].includes(aiProfile) && !workspace.providers.some((profile) => profile.id === aiProfile && profile.model);
+        const unavailable = workspace && aiProfile && !['local', 'workspace'].includes(aiProfile) && !([...workspace.providers, ...workspace.sharedProviders].some((profile) => profile.id === aiProfile && profile.model));
         await createProject(unavailable ? { ...job.options, aiProfile: 'local' } : job.options);
         if (unavailable) notify('That AI profile is no longer available. Retrying with local analysis.');
       }
@@ -132,7 +142,7 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
   }
   return <div className="view-enter project-view">
     <a className="back-link" href="#/library"><ArrowLeft size={16}/>Clip library</a>
-    <PageHeading label={job.options.demo ? 'DEMO PROJECT' : 'CLIPPING PROJECT'} title={job.title} subtitle={`${job.sourceKind === 'live' ? 'Live capture' : job.sourceKind === 'replay' ? 'Livestream replay' : job.options.demo ? 'Bundled sample' : 'YouTube'}${job.creator ? ` · ${job.creator}` : ''} · ${SHORT_DATE.format(new Date(job.createdAt))}${job.duration ? ` · ${timecode(job.duration)} source` : ''}${job.liveInput ? ` · ${job.liveInput}` : ''}`}>
+    <PageHeading label={job.sourceKind === 'shared' ? 'SAVED CLIP' : job.options.demo ? 'DEMO PROJECT' : 'CLIPPING PROJECT'} title={job.title} subtitle={`${job.sourceKind === 'shared' ? 'From the shared library' : job.sourceKind === 'live' ? 'Live capture' : job.sourceKind === 'replay' ? 'Livestream replay' : job.options.demo ? 'Bundled sample' : 'YouTube'}${job.creator ? ` · ${job.creator}` : ''} · ${SHORT_DATE.format(new Date(job.createdAt))}${job.duration ? ` · ${timecode(job.duration)}${job.sourceKind === 'shared' ? '' : ' source'}` : ''}${job.liveInput ? ` · ${job.liveInput}` : ''}`}>
       {job.options.url && <ActionLink href={job.options.url} icon={ExternalLink} target="_blank" rel="noreferrer">Source</ActionLink>}
       {!active && !uploading && <button className="icon-button" onClick={() => { setError(''); setConfirm('delete'); }} title="Delete project" aria-label="Delete project"><Trash2 size={17}/></button>}
     </PageHeading>
@@ -140,18 +150,24 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
     {!active && !ready && <section className="panel failure-panel"><Glyph icon={CircleAlert}/><div><h2>{job.status === 'cancelled' ? 'Project stopped' : 'Couldn’t finish this project'}</h2><p>{job.detail}</p><div className="failure-actions"><Button icon={RefreshCw} tone="primary" busy={busy === 'retry'} onClick={() => runAction('retry')}>Try again</Button><ActionLink href="#/studio">Back to studio</ActionLink></div></div></section>}
     {job.warnings?.map((warning, index) => <Banner key={index} tone="warning" icon={Info}>{warning}</Banner>)}
     {!!job.clips.length && <>
+      {ready && job.sourceKind !== 'shared' && <div className="panel share-bar library-share-bar"><Glyph icon={job.sharedAt ? Users : LockKeyhole}/><div><h3>{job.sharedAt ? 'Shared in the Clip Library' : 'These clips are private'}</h3><p>{job.sharedAt ? 'Members can preview and save the finished exports.' : 'Only you can open this project. Share the exports when you’re ready.'}</p></div><Button onClick={() => setLibraryReview(true)} icon={job.sharedAt ? null : Users}>{job.sharedAt ? 'Stop sharing' : 'Share to library'}</Button></div>}
       <div className="section-heading results-head"><div><h2>{job.clips.length} {job.clips.length === 1 ? 'clip' : 'clips'} {ready ? 'ready' : 'rendered'}</h2><p>{platform.name} · {frame.ratio} · {frame.width} × {frame.height} MP4{job.engine ? ` · ${job.engine}` : ''}{job.signals?.length ? ` · ${job.signals.join(', ')}` : ''}</p>
         {job.autoSelection && <p className="auto-count-summary"><Sparkles size={13}/>{job.autoSelection.fallback ? 'Auto count: kept the best available moment; none stood out from the rest.' : `Auto count: selected ${job.autoSelection.count} distinct ${job.autoSelection.count === 1 ? 'highlight' : 'highlights'}.`}</p>}
         {job.options.captionStyle && job.clips.some((clip) => clip.burnedCaptions) && <p className="export-style-summary"><Captions size={13}/>{styleLabel} · Burned into MP4</p>}
       </div><JobBadge state={job.status}/></div>
       {canShare && <div className="panel share-bar"><Glyph icon={TikTokIcon}/><div><h3>TikTok drafts</h3><p>{job.options.tiktok ? 'Select the clips you want to send, then review and approve the batch.' : 'Choose clips to send to your TikTok inbox.'}</p></div><Button tone={shareCount ? 'primary' : 'neutral'} icon={ArrowRight} disabled={!shareCount} onClick={() => setReview(true)}>{shareCount ? `Review ${shareCount} selected` : 'Review selected'}</Button></div>}
-      {job.options.tiktok && !canShare && ready && <Banner tone="warning" icon={TikTokIcon}>Connect TikTok in <a href="#/integrations">Integrations</a> to review and send these drafts.</Banner>}
-      <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} notify={notify}/>)}</div>
-      {ready && !job.options.demo && workspace && (!google?.connected || !workspace.tiktok.connected) && <p className="result-connections"><Plug size={15}/><span>Manage connected destinations in <a href="#/integrations">Integrations</a>.</span></p>}
+      {job.options.tiktok && !canShare && ready && <Banner tone="warning" icon={TikTokIcon}>Connect TikTok in <a href="#/settings/integrations">Integrations</a> to review and send these drafts.</Banner>}
+      <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} onBuffer={ready && (!clip.bufferDraft || clip.bufferDraft.state === 'failed') ? () => setBufferReview(clip.id) : null} notify={notify}/>)}</div>
+      {ready && !job.options.demo && workspace && (!google?.connected || !workspace.tiktok.connected) && <p className="result-connections"><Plug size={15}/><span>Manage connected destinations in <a href="#/settings/integrations">Integrations</a>.</span></p>}
     </>}
-    {clipToPlay && <Modal title={clipToPlay.title} subtitle={`${timecode(clipToPlay.start)} to ${timecode(clipToPlay.end)} in the source`} onClose={() => setPreview(null)}><div className="video-preview" style={clipRatio(frame)}><video src={clipToPlay.videoUrl} poster={clipToPlay.posterUrl || undefined} controls autoPlay playsInline preload="metadata"/></div><div className="modal-actions"><ActionLink icon={Download} tone="primary" href={`${clipToPlay.videoUrl}?download=1`} download>Download MP4</ActionLink></div></Modal>}
+    {libraryReview && <LibraryShareReview job={job} onClose={() => setLibraryReview(false)} onUpdate={updateProject} notify={notify}/>}
+    {bufferClip && <BufferReview key={bufferClip.id} job={job} clip={bufferClip} frame={frame} profiles={buffers} canHost={workspace?.bufferCanHost} onClose={() => setBufferReview(null)} onSent={(updated, draft) => {
+      updateProject(updated); setBufferReview(null);
+      notify(draft?.state === 'draft' ? 'Draft saved in Buffer. Nothing was scheduled.' : draft?.reason || 'Buffer did not confirm the draft.', draft?.state === 'draft' ? 'success' : 'error');
+    }}/>}
+    {clipToPlay && <Modal title={clipToPlay.title} subtitle={job.sourceKind === 'shared' ? `${timecode(clipToPlay.duration)} · Saved from the shared library` : `${timecode(clipToPlay.start)} to ${timecode(clipToPlay.end)} in the source`} onClose={() => setPreview(null)}><div className="video-preview" style={clipRatio(frame)}><video src={clipToPlay.videoUrl} poster={clipToPlay.posterUrl || undefined} controls autoPlay playsInline preload="metadata"/></div><div className="modal-actions"><ActionLink icon={Download} tone="primary" href={`${clipToPlay.videoUrl}?download=1`} download>Download MP4</ActionLink></div></Modal>}
     {review && canShare && <ReviewUpload key={workspace.tiktok.account.id} job={job} selected={selected} tiktok={workspace.tiktok} frame={frame} onClose={() => setReview(false)} onSent={(updated) => { updateProject(updated); setReview(false); setSelected(new Set()); notify('Drafts queued for upload. Track delivery here.'); }}/>}
     {clipToSend && google?.connected && <GoogleUploadReview key={`${accountKey}:${clipToSend.id}`} job={job} clip={clipToSend} google={google} frame={frame} onClose={() => setGoogleReview(null)} onQueued={(updated, label) => { updateProject(updated); setGoogleReview(null); notify(`Upload queued for ${label}. Track delivery here.`); }}/>}
-    {confirm && <Confirm title={confirm === 'delete' ? 'Delete project?' : 'Stop this project?'} message={confirm === 'delete' ? 'This permanently removes the project and its local clips. It does not remove files or drafts already uploaded to another service.' : 'The engine will stop processing. You can start the project again later.'} label={confirm === 'delete' ? 'Delete project' : 'Stop project'} onClose={() => setConfirm('')} onConfirm={() => runAction(confirm)} busy={busy === confirm} error={error}/>}
+    {confirm && <Confirm title={confirm === 'delete' ? 'Delete project?' : 'Stop this project?'} message={confirm === 'delete' ? 'This permanently removes your project and clips. Other members’ saved copies and uploads to external services will stay.' : 'The engine will stop processing. You can start the project again later.'} label={confirm === 'delete' ? 'Delete project' : 'Stop project'} onClose={() => setConfirm('')} onConfirm={() => runAction(confirm)} busy={busy === confirm} error={error}/>}
   </div>;
 }

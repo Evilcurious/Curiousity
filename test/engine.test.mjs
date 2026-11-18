@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -10,29 +9,16 @@ import { join } from 'node:path';
 import { ffmpeg, run } from '../server/tools.mjs';
 import { defaultCaptionStyle } from '../shared/captions.mjs';
 
-const password = 'integration-test-only';
-const headers = { Authorization: `Basic ${Buffer.from(`clipforge:${password}`).toString('base64')}`, 'X-Clipforge': 'workspace' };
+import { exampleAdmin, startEngine } from './helpers/http.mjs';
 
 async function boot(env, t) {
-  const child = spawn(process.execPath, ['server/main.mjs'], { env: { ...process.env, HOST: '127.0.0.1', PORT: '0', AUTH_USER: 'clipforge', AUTH_PASSWORD: password, GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '', GOOGLE_REDIRECT_URI: '', ...env } });
-  const exit = new Promise((resolve) => child.once('close', resolve));
-  t.after(async () => { child.kill('SIGTERM'); await exit; });
-  const url = await new Promise((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => reject(new Error('Engine did not start.')), 10000);
-    timer.unref();
-    let log = '';
-    child.stderr.on('data', (chunk) => { log += chunk.toString(); });
-    child.stdout.on('data', (chunk) => {
-      const match = chunk.toString().match(/listening on (http:\/\/[^\s]+)/);
-      if (match) { clearTimeout(timer); resolve(match[1]); }
-    });
-    child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Engine exited (${code}): ${log}`)); });
-    child.once('error', reject);
-  });
-  const request = (path, options = {}) => fetch(`${url}/api${path}`, { ...options, headers: { ...headers, ...(options.headers || {}) } });
-  const post = (path, body) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return { url, post, request };
+  const engine = await startEngine(t, { env: { ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: exampleAdmin.password, ...env } });
+  const app = engine.agent();
+  const session = await app.signin();
+  assert.equal(session.status, 200, await session.text());
+  return { ...app, agent: engine.agent };
 }
+
 async function done(request, id) {
   const timeout = Date.now() + 45_000;
   while (Date.now() < timeout) {
@@ -79,7 +65,7 @@ test('API saves repeated provider profiles, keeps distinct keys, and separates r
   assert.deepEqual(workspace.captions, { providerId: profiles[1].id, model: 'timestamped-audio' });
   const disk = await readFile(join(data, 'workspace.json'), 'utf8');
   assert.doesNotMatch(disk, /ephemeral-test-key-/);
-  assert.equal(new Set(JSON.parse(disk).providers.map(({ apiKey }) => apiKey)).size, 22);
+  assert.equal(new Set(JSON.parse(disk).users[0].workspace.providers.map(({ apiKey }) => apiKey)).size, 22);
   assert.equal((await app.request(`/providers/${profiles[0].id}`, { method: 'DELETE' })).status, 204);
   const changed = await (await app.request('/workspace')).json();
   assert.equal(changed.activeProviderId, null);
@@ -108,10 +94,10 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
   assert.match(cookie, /SameSite=Lax/);
   const auth = new URL((await signed.json()).url);
   const result = `${app.url}/api/google/callback?state=${auth.searchParams.get('state')}&error=access_denied`;
-  const noCookie = await fetch(result, { redirect: 'manual' });
+  const noCookie = await fetch(result, { redirect: 'manual', headers: app.getHeaders() });
   assert.equal(noCookie.status, 303);
   assert.match(decodeURIComponent(noCookie.headers.get('location')), /not started in this browser/);
-  const cancelled = await fetch(result, { redirect: 'manual', headers: { Cookie: cookie.split(';')[0] } });
+  const cancelled = await fetch(result, { redirect: 'manual', headers: { Cookie: `${app.getHeaders().Cookie}; ${cookie.split(';')[0]}` } });
   assert.equal(cancelled.status, 303);
   assert.match(decodeURIComponent(cancelled.headers.get('location')), /cancelled or declined/);
   if (!workspace.tools.ffmpeg) { t.diagnostic('FFmpeg is not installed; validated the HTTP API, skipping the media portion.'); return; }
@@ -132,16 +118,16 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
   const probe = async (filename) => (await run(ffmpeg, ['-hide_banner', '-i', filename, '-t', '0', '-f', 'null', '-'], { cwd: mediaDir })).err;
   assert.match(await probe('video.mp4'), /Video: h264[^\n]*\b1280x854\b/);
   assert.match(await probe('poster.jpg'), /Video: mjpeg[^\n]*\b640x426\b/);
-  const mp4 = await fetch(`${app.url}${clip.videoUrl}?download=1`, { headers: { ...headers, Range: 'bytes=0-15' } });
+  const mp4 = await fetch(`${app.url}${clip.videoUrl}?download=1`, { headers: { ...app.getHeaders(), Range: 'bytes=0-15' } });
   assert.equal(mp4.status, 206);
   assert.match(mp4.headers.get('content-disposition'), /^attachment/);
   assert.equal(Buffer.from(await mp4.arrayBuffer()).toString('ascii', 4, 8), 'ftyp');
-  const srt = await fetch(`${app.url}${clip.captionsUrl}`, { headers });
+  const srt = await fetch(`${app.url}${clip.captionsUrl}`, { headers: app.getHeaders() });
   assert.equal(srt.status, 200);
   const text = await srt.text();
   assert.match(text, /^1\n\d{2}:\d{2}:\d{2},\d{3} --> /);
   assert.match(text, /\p{Script=Arabic}/u);
-  const poster = await fetch(`${app.url}${clip.posterUrl}`, { headers });
+  const poster = await fetch(`${app.url}${clip.posterUrl}`, { headers: app.getHeaders() });
   assert.equal(poster.status, 200);
   assert.equal(poster.headers.get('content-type'), 'image/jpeg');
   await poster.arrayBuffer();
@@ -158,7 +144,7 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
     assert.equal(shot.captionLanguage, 'ur-Latn');
     assert.ok(shot.hashtags.includes('#MejoresMomentos'));
     assert.equal(shot.burnedCaptions, workspace.tools.subtitles);
-    const srt = await (await fetch(`${app.url}${shot.captionsUrl}`, { headers })).text();
+    const srt = await (await fetch(`${app.url}${shot.captionsUrl}`, { headers: app.getHeaders() })).text();
     assert.match(srt, /[A-Za-z]{3,} [A-Za-z]{3,}/);
     assert.doesNotMatch(srt, /\p{Script=Arabic}|\{\\/u);
   }
@@ -224,7 +210,23 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
   assert.equal(job.clips[0].captionLanguage, 'es');
   assert.equal(job.frame.ratio, '16:9');
   assert.deepEqual(job.clips[0].hashtags, []);
-  assert.match(await (await fetch(`${replay.url}${job.clips[0].captionsUrl}`, { headers })).text(), /un gancho/);
+  assert.match(await (await fetch(`${replay.url}${job.clips[0].captionsUrl}`, { headers: replay.getHeaders() })).text(), /un gancho/);
+  const premium = replay.agent();
+  let enrolled = await premium.signup('engine-premium@example.test');
+  assert.equal(enrolled.status, 201);
+  const memberId = (await enrolled.json()).user.id;
+  assert.equal((await replay.put(`/admin/providers/${override.id}/share`, { shared: true })).status, 200);
+  assert.equal((await premium.post('/projects', { ...videoOptions, aiProfile: override.id })).status, 404);
+  assert.equal((await replay.put(`/admin/accounts/${memberId}/premium`, { premium: true })).status, 200);
+  const sharedRun = await premium.post('/projects', { ...videoOptions, aiProfile: override.id });
+  assert.equal(sharedRun.status, 202);
+  const memberJob = await done(premium.request, (await sharedRun.json()).id);
+  assert.equal(memberJob.status, 'ready', memberJob.error);
+  assert.equal(memberJob.engine, 'Per-job custom chat');
+  assert.deepEqual(calls.at(-1), { route: '/override/chat/completions', key: 'Bearer fake-override-key', model: 'override-chat' });
+  assert.equal((await replay.request(`/projects/${memberJob.id}`)).status, 404);
+  assert.equal((await replay.put(`/admin/accounts/${memberId}/premium`, { premium: false })).status, 200);
+  assert.equal((await premium.post('/projects', { ...videoOptions, aiProfile: override.id })).status, 404);
   const untranslated = await replay.post('/projects', { url: 'https://youtu.be/dQw4w9WgXcQ', count: 1, aspectRatio: '1:1', captionLanguage: 'ja' });
   const fallback = await done(replay.request, (await untranslated.json()).id);
   assert.equal(fallback.status, 'ready', fallback.error);

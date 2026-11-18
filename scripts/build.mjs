@@ -17,7 +17,7 @@ export async function buildWeb({ watch = false } = {}) {
     absWorkingDir: root,
     entryPoints: ['src/main.jsx'],
     outdir: join(dist, 'assets'),
-    entryNames: 'clipforge-[hash]',
+    entryNames: 'curiousity-[hash]',
     assetNames: '[name]-[hash]',
     publicPath: '/assets',
     bundle: true,
@@ -30,7 +30,7 @@ export async function buildWeb({ watch = false } = {}) {
     legalComments: 'linked',
     metafile: true,
     plugins: [{
-      name: 'clipforge-html',
+      name: 'curiousity-html',
       setup(builder) {
         builder.onEnd((result) => {
           if (result.errors.length) return;
@@ -52,7 +52,7 @@ export async function buildWeb({ watch = false } = {}) {
     return watcher;
   }
   await build(options);
-  console.log('Built Clipforge into dist/.');
+  console.log('Built Curiousity into dist/.');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await buildWeb();

@@ -30,7 +30,7 @@ try {
   if (!process.argv.includes('--no-whisper') && process.argv.includes('--download-model')) {
     run(python, ['-c', 'import os; from faster_whisper import WhisperModel; WhisperModel(os.getenv("WHISPER_MODEL", "base"), device="cpu", compute_type="int8")']);
   }
-  console.log('\nMedia tools installed. Start Clipforge with npm run dev.');
+  console.log('\nMedia tools installed. Start Curiousity with npm run dev.');
   if (!process.argv.includes('--no-whisper') && !process.argv.includes('--download-model')) {
     console.log('Whisper weights download on first use. Run npm run setup -- --download-model to fetch them now.');
   }

@@ -1,5 +1,5 @@
 {
-  "name": "clipforge-workspace",
+  "name": "curiousity-workspace",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -11,16 +11,19 @@
     "build": "node scripts/build.mjs",
     "start": "node --env-file-if-exists=.env server/main.mjs",
     "setup": "node --env-file-if-exists=.env scripts/setup.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "admin": "node --env-file-if-exists=.env scripts/admin.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/manrope": "^5.3.0",
     "@fontsource/space-grotesk": "^5.3.0",
     "express": "^5.3.0",
+    "ipaddr.js": "^2.5.0",
     "lucide-react": "^1.74.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "undici": "^7.30.2"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

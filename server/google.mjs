@@ -115,9 +115,9 @@ async function transferFile({ target, path, token, metadata }) {
   } finally { await file.close(); }
 }
 
-export function createGoogle(store) {
+export function createGoogle(store, { useEnv = true, background = true } = {}) {
   const state = store.state.google ||= {};
-  const envConfig = process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI
+  const envConfig = useEnv && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI
     ? { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET, redirectUri: process.env.GOOGLE_REDIRECT_URI } : null;
   const config = () => envConfig || (state.config && { ...state.config, clientSecret: store.unseal(state.config.clientSecret) });
   const fingerprint = () => createHash('sha256').update(JSON.stringify(config() || null)).digest('hex');
@@ -148,7 +148,7 @@ export function createGoogle(store) {
     const selected = [...new Set(Array.isArray(targets) ? targets.filter((target) => typeof target === 'string' && Object.hasOwn(googleScopes, target)) : [])];
     if (!selected.length) throw new HttpError(400, 'Select Google Drive, YouTube, or both.');
     const redirect = redirectUrl(creds.redirectUri);
-    if (origin && origin !== redirect.origin) throw new HttpError(400, `Open Clipforge at ${redirect.origin} to start this Google sign-in.`);
+    if (origin && origin !== redirect.origin) throw new HttpError(400, `Open Curiousity at ${redirect.origin} to start this Google sign-in.`);
     for (const [id, entry] of pending) if (entry.expiry < Date.now()) pending.delete(id);
     if (pending.size >= 30) throw new HttpError(429, 'Too many pending sign-ins. Wait a few minutes and try again.');
     const id = randomBytes(24).toString('base64url');
@@ -221,9 +221,9 @@ export function createGoogle(store) {
   }
   if (recovered) store.save();
   const wake = () => tick().catch(() => {});
-  setInterval(wake, 2600).unref();
+  if (background) setInterval(wake, 2600).unref();
   return {
-    describe, configure, connect, callback, disconnect,
+    describe, configure, connect, callback, disconnect, wake,
     queue(job, body) {
       const target = typeof body.target === 'string' && Object.hasOwn(googleScopes, body.target) ? body.target : null;
       const account = currentAccount();

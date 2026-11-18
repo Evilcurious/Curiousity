@@ -3,8 +3,9 @@ import { HttpError, text } from './validation.mjs';
 import { languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { providerCatalog } from '../shared/providers.mjs';
 import { isLatinCaption } from './roman-urdu.mjs';
+import { boundedText, externalUrl, guardedFetch } from './outbound.mjs';
 
-export function providerInput(body, existing, store) {
+export function providerInput(body, existing, store, { allowLocal = true } = {}) {
   const type = text(body.type, 24);
   if (!Object.hasOwn(providerCatalog, type)) throw new HttpError(400, 'Select a supported provider.');
   const definition = providerCatalog[type];
@@ -18,6 +19,7 @@ export function providerInput(body, existing, store) {
   let url;
   try { url = new URL(rawBase); } catch { throw new HttpError(400, 'Enter a valid API base URL, such as https://example.com/v1.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new HttpError(400, 'Use a plain HTTP(S) API URL without credentials, queries, or fragments.');
+  if (configurable) externalUrl(url.href, { allowLocal });
   const baseUrl = url.toString().replace(/\/$/, '');
   const savedKey = existing?.type === type && existing.baseUrl === baseUrl ? existing.apiKey : '';
   const apiKey = body.clearKey === true ? '' : supplied ? store.seal(supplied) : savedKey;
@@ -43,19 +45,20 @@ async function request(profile, store, route, { body, signal, timeout = 25_000 }
   if (body !== undefined && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
   let res;
   try {
-    res = await fetch(`${profile.baseUrl}${route}`, {
+    res = await guardedFetch(`${profile.baseUrl}${route}`, {
       headers, method: body === undefined ? 'GET' : 'POST',
       body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
-      redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
-    });
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
+    }, { allowLocal: providerCatalog[profile.type].editableUrl === true, allowQuery: true });
   } catch (error) {
     if (signal?.aborted) throw signal.reason;
     throw new HttpError(502, 'Could not reach the provider. Check its address and network access.');
   }
   if (!res.ok) {
+    res.body?.cancel().catch(() => {});
     throw new HttpError(502, `Provider returned HTTP ${res.status}. Check the key, permissions, and model name.`);
   }
-  try { return await res.json(); } catch { throw new HttpError(502, 'The provider did not return a valid API response.'); }
+  try { return JSON.parse(await boundedText(res, 2 * 1024 * 1024)); } catch (error) { if (signal?.aborted) throw signal.reason; if (error instanceof HttpError) throw error; throw new HttpError(502, 'The provider did not return a valid API response.'); }
 }
 
 export async function listModels(profile, store) {

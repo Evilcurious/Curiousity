@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ArrowRight, ArrowUpRight, AudioLines, Captions, ChevronDown, ChevronRight, Clipboard, Cpu, Film, Frame, Hash, Languages, Link2, LoaderCircle, Play, Radio, ShieldCheck, SlidersHorizontal, Sparkles, Type } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, AudioLines, Captions, ChevronDown, ChevronRight, Clipboard, Crown, Cpu, Film, Frame, Hash, Languages, Link2, LoaderCircle, Play, Radio, ShieldCheck, SlidersHorizontal, Sparkles, Type } from 'lucide-react';
 import { Banner, Button, JobBadge, Modal, PanelHeading, SHORT_DATE, Switch, TextLink, TikTokIcon, timecode } from './ui.jsx';
 
 import { exportFrame, frameFor, languages, platforms, ratioChoices, romanUrdu } from '../shared/exports.mjs';
@@ -17,7 +17,7 @@ export function ProjectRow({ project }) {
       {project.options.demo ? <img src="/images/demo-studio.jpg" alt=""/> : first?.posterUrl ? <img src={first.posterUrl} alt="" loading="lazy"/> : <Film size={21}/>}
       {first && <span className="thumb-time">{timecode(first.duration)}</span>}
     </div>
-    <div className="project-row-text"><div className="project-row-title"><h3>{project.title}</h3>{project.options.demo && <span className="tag tag-demo">Demo</span>}</div><p>{SHORT_DATE.format(new Date(project.createdAt))}<span>·</span>{project.clips.length ? `${project.clips.length} ${project.clips.length === 1 ? 'clip' : 'clips'}` : project.sourceKind === 'live' ? 'Livestream' : 'Clipping project'}</p></div>
+    <div className="project-row-text"><div className="project-row-title"><h3>{project.title}</h3>{project.options.demo && <span className="tag tag-demo">Demo</span>}</div><p>{SHORT_DATE.format(new Date(project.createdAt))}<span>·</span>{project.clips.length ? `${project.clips.length} ${project.clips.length === 1 ? 'clip' : 'clips'}` : project.sourceKind === 'shared' ? 'Saved clip' : project.sourceKind === 'live' ? 'Livestream' : 'Clipping project'}</p></div>
     <JobBadge state={project.status}/><ChevronRight className="row-arrow" size={17}/>
   </a>;
 }
@@ -45,19 +45,21 @@ function LanguageSelect({ kind, value, onChange }) {
   </OutputSelect>;
 }
 
-export default function Studio({ workspace, projects, projectsError, createProject, notify, fields, setFields }) {
+export default function Studio({ user, workspace, projects, projectsError, createProject, notify, fields, setFields }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [connect, setConnect] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
   const urlInput = useRef(null), customInput = useRef(null), ratioInput = useRef(null);
   const profiles = (workspace?.providers || []).filter((profile) => profile.model);
-  const active = profiles.find((profile) => profile.id === workspace?.activeProviderId);
-  const selected = profiles.find((profile) => profile.id === fields.aiProfile);
+  const shared = workspace?.sharedProviders || [];
+  const choices = [...profiles, ...shared];
+  const active = choices.find((profile) => profile.id === workspace?.activeProviderId);
+  const selected = choices.find((profile) => profile.id === fields.aiProfile);
   const aiProfile = fields.aiProfile === 'workspace' || selected ? fields.aiProfile : 'local';
   const captionStyle = captionScriptFont(fields.captionLanguage) ? { ...fields.captionStyle, font: 'auto' } : fields.captionStyle;
   const profileNameCount = new Map();
-  for (const { name } of profiles) profileNameCount.set(name, (profileNameCount.get(name) || 0) + 1);
+  for (const { name } of choices) profileNameCount.set(name, (profileNameCount.get(name) || 0) + 1);
   const profileLabel = (profile) => profileNameCount.get(profile.name) > 1 ? `${profile.name} · ${profile.model} · ${profile.id.slice(-6)}` : profile.name;
   const tiktokConnected = Boolean(workspace?.tiktok.connected);
   const count = fields.count;
@@ -75,7 +77,7 @@ export default function Studio({ workspace, projects, projectsError, createProje
     setBusy(demo ? 'demo' : 'submit');
     try {
       const { custom, ratioMode, customRatio, ...options } = fields;
-      await createProject({ ...options, url: fields.url.trim(), demo, count: resolved, aiProfile, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
+      await createProject({ ...options, url: fields.url.trim(), demo, count: resolved, aiProfile: demo ? 'local' : aiProfile, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
     } catch (err) { setError(err.message); notify(err.message, 'error'); }
     finally { setBusy(''); }
   }
@@ -115,7 +117,7 @@ export default function Studio({ workspace, projects, projectsError, createProje
             {presets.map((n) => <button key={n} className={`count-button ${count === n ? 'is-active' : ''}`} aria-pressed={count === n} type="button" onClick={() => { change('count', n); setError(''); }}>{n}</button>)}
             <button className={`count-button count-custom ${count === 'custom' ? 'is-active' : ''}`} aria-pressed={count === 'custom'} type="button" onClick={() => { change('count', 'custom'); setError(''); window.requestAnimationFrame(() => customInput.current?.focus()); }}><SlidersHorizontal size={14}/>Custom</button>
           </div>
-          {count === 'auto' && <p className="count-note">Clipforge keeps strong, non-overlapping moments it finds, up to {maxClips}. If none stand out, it keeps the best one.</p>}
+          {count === 'auto' && <p className="count-note">Curiousity keeps strong, non-overlapping moments it finds, up to {maxClips}. If none stand out, it keeps the best one.</p>}
           {count === 'custom' && <div className="inline-custom"><label className="field-label" htmlFor="custom-count">Custom count</label><input ref={customInput} id="custom-count" type="number" min="1" max={maxClips} value={fields.custom} onChange={(event) => { change('custom', event.target.value); setError(''); }}/><span>Up to {maxClips} clips</span></div>}
           <div className="export-settings" role="group" aria-labelledby="export-label">
             <div className="export-heading"><span className="field-label" id="export-label"><Frame size={15}/> Export format</span>{frame && <output className="format-hint" aria-live="polite">{frame.width} × {frame.height} MP4</output>}</div>
@@ -143,8 +145,9 @@ export default function Studio({ workspace, projects, projectsError, createProje
           {fields.captions && <Setting icon={Type} title="Caption style" detail={captionStyleLabel(captionStyle)}><Button aria-label="Customize caption style" className="setting-button" onClick={() => setStyleOpen(true)}>Customize</Button></Setting>}
           <Setting icon={Hash} title="Hashtag language" detail="Suggestions, separate from captions"><LanguageSelect kind="Hashtag" value={fields.hashtagLanguage} onChange={(value) => change('hashtagLanguage', value)}/></Setting>
           <Setting icon={TikTokIcon} title="Send to TikTok" detail={tiktokConnected ? 'Preselect clips for draft review' : 'Account not connected'}><Switch label="Send to TikTok" enabled={tiktokConnected && fields.tiktok} onChange={(value) => tiktokConnected ? change('tiktok', value) : setConnect(true)}/></Setting>
-          <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/providers">Manage provider profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</OutputSelect></Setting>
+          <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Premium AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Premium</option>)}</optgroup>}</OutputSelect></Setting>
         </div>
+        {user?.role === 'member' && !user.premium && <a className="studio-premium" href="#/settings/account"><Crown size={16}/><span>{user.premiumRequested ? 'Premium request pending' : 'Need an AI model? Request premium'}</span><ChevronRight size={14}/></a>}
       </section>
     </div>
 
@@ -156,7 +159,7 @@ export default function Studio({ workspace, projects, projectsError, createProje
       </div>
     </section>
     {styleOpen && <CaptionAppearance value={fields.captionStyle} frame={frame || exportFrame({ platform: fields.platform })} language={fields.captionLanguage} canBurn={workspace?.tools?.subtitles} onClose={() => setStyleOpen(false)} onApply={(style) => { change('captionStyle', style); setStyleOpen(false); }}/>}
-    {connect && <Modal onClose={() => setConnect(false)} title="Connect TikTok" subtitle="Link a TikTok account to send reviewed clips to your inbox. You’ll finish publishing in TikTok."><div className="modal-actions"><Button onClick={() => setConnect(false)}>Not now</Button><a className="button button-primary" href="#/integrations" onClick={() => setConnect(false)}><span>Open integrations</span><ArrowRight size={16}/></a></div></Modal>}
+    {connect && <Modal onClose={() => setConnect(false)} title="Connect TikTok" subtitle="Link a TikTok account to send reviewed clips to your inbox. You’ll finish publishing in TikTok."><div className="modal-actions"><Button onClick={() => setConnect(false)}>Not now</Button><a className="button button-primary" href="#/settings/integrations" onClick={() => setConnect(false)}><span>Open integrations</span><ArrowRight size={16}/></a></div></Modal>}
   </div>;
 }
 

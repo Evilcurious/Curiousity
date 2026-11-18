@@ -18,12 +18,12 @@ export async function api(path, opts = {}) {
   try {
     response = await fetch(`/api${path}`, { method: opts.method || 'GET', signal: opts.signal, headers: { 'X-Clipforge': 'workspace', ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
   } catch (error) {
-    if (error.name === 'AbortError') throw error;
-    throw new Error('Cannot reach the Clipforge engine. Check that the server is running.');
+    if (opts.signal?.aborted || error.name === 'AbortError') throw error;
+    throw new Error('Cannot reach the Curiousity engine. Check that the server is running.');
   }
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload) throw new Error(payload?.error || 'The Clipforge engine could not complete the request.');
+  if (!response.ok || !payload) throw Object.assign(new Error(payload?.error || 'The Curiousity engine could not complete the request.'), { status: response.status });
   return payload;
 }
 

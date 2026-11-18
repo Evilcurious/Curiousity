@@ -371,8 +371,8 @@ export async function processProject(job, store, session, update) {
     const automatic = options.count === 'auto';
     const limit = automatic ? maxClips : options.count;
     const selection = options.aiProfile || 'workspace';
-    const providerId = options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
-    const savedProfile = providerId ? store.state.providers.find((p) => p.id === providerId) : null;
+    const providerId = Object.hasOwn(job, 'chatProviderId') ? job.chatProviderId : options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
+    const savedProfile = providerId ? store.chatProfile(providerId) : null;
     const profile = savedProfile?.model ? { ...savedProfile } : null;
     if (providerId && !profile) warnings.push('The selected AI profile or chat model is no longer available. Local scoring was used.');
     let engine = 'Local analysis', ordered = candidates;
@@ -405,7 +405,7 @@ export async function processProject(job, store, session, update) {
     const target = options.captionLanguage;
     if (options.captions && target && target !== 'source' && (target !== transcript.language || target === romanUrdu)) {
       update({ progress: 60, detail: `Preparing ${languageLabel(target)} captions.` });
-      localized = await localizeClips({ original: originalRows, sourceLanguage: transcript.language, target, provider: profile, store, signal,
+      localized = await localizeClips({ original: originalRows, sourceLanguage: transcript.language, target, provider: providerId && store.chatProfile(providerId) ? profile : null, store, signal,
         tryTrack: async (language) => {
           if (options.demo) {
             const translations = JSON.parse(await readFile(join(ROOT, 'server', 'assets', 'demo-translations.json'), 'utf8'));

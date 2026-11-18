@@ -8,9 +8,7 @@ const apiRoot = 'https://open.tiktokapis.com/v2';
 const authorize = 'https://www.tiktok.com/v2/auth/authorize/';
 const scopes = ['user.info.basic', 'video.upload'];
 const MiB = 1024 * 1024;
-const persistedConfig = process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET && process.env.TIKTOK_REDIRECT_URI
-  ? { clientKey: process.env.TIKTOK_CLIENT_KEY, clientSecret: process.env.TIKTOK_CLIENT_SECRET, redirectUri: process.env.TIKTOK_REDIRECT_URI }
-  : null;
+
 
 export function chunkPlan(total) {
   const chunkSize = Math.min(total, 10 * MiB);
@@ -34,10 +32,13 @@ async function tiktokApi(route, { headers = {}, body, token } = {}) {
   return payload.data ?? payload;
 }
 
-export function createTikTok(store) {
+export function createTikTok(store, { useEnv = true, background = true } = {}) {
+  const persistedConfig = useEnv && process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET && process.env.TIKTOK_REDIRECT_URI
+  ? { clientKey: process.env.TIKTOK_CLIENT_KEY, clientSecret: process.env.TIKTOK_CLIENT_SECRET, redirectUri: process.env.TIKTOK_REDIRECT_URI }
+  : null;
   const state = store.state.tiktok;
   const pending = new Map();
-  let refreshing, processing = false;
+  let refreshing, processing = false, revision = 0;
   const readConfig = () => persistedConfig || (state.config && { ...state.config, clientSecret: store.unseal(state.config.clientSecret) });
   const enabled = () => Boolean(persistedConfig || state.config);
   const currentAccount = () => state.account && { id: state.account.id, name: state.account.name };
@@ -54,18 +55,20 @@ export function createTikTok(store) {
     let redirect;
     try { redirect = new URL(text(body.redirectUri, 500)); } catch { throw new HttpError(400, 'Enter a valid HTTPS redirect URL.'); }
     if (redirect.protocol !== 'https:' || redirect.pathname !== '/api/tiktok/callback' || redirect.search || redirect.hash || redirect.username || redirect.password) throw new HttpError(400, 'The redirect URL must be HTTPS and end in /api/tiktok/callback.');
-    if (state.config && state.config.clientKey !== clientKey) delete state.account;
+    const before = stamp();
     state.config = { clientKey, clientSecret: secret ? store.seal(secret) : state.config.clientSecret, redirectUri: redirect.toString() };
+    if (before !== stamp()) { delete state.account; pending.clear(); revision++; }
     store.save();
     return describe();
   }
-  function connect() {
+  function connect(origin) {
     const config = readConfig();
     if (!config) throw new HttpError(409, 'Save TikTok app credentials first.');
+    if (origin && new URL(config.redirectUri).origin !== origin) throw new HttpError(400, 'Open Curiousity at the registered HTTPS redirect origin to connect TikTok.');
     for (const [id, entry] of pending) if (entry.expiresAt < Date.now()) pending.delete(id);
     if (pending.size >= 30) throw new HttpError(429, 'Too many pending connections. Try again in a few minutes.');
     const csrfState = randomBytes(24).toString('base64url');
-    pending.set(csrfState, { expiresAt: Date.now() + 10 * 60_000, config: stamp() });
+    pending.set(csrfState, { expiresAt: Date.now() + 10 * 60_000, config: stamp(), revision });
     const url = new URL(authorize);
     url.search = new URLSearchParams({ client_key: config.clientKey, scope: scopes.join(','), response_type: 'code', redirect_uri: config.redirectUri, state: csrfState }).toString();
     return url.toString();
@@ -74,20 +77,21 @@ export function createTikTok(store) {
     const id = text(query.state, 100);
     const entry = pending.get(id);
     pending.delete(id);
-    if (!entry || entry.expiresAt < Date.now() || entry.config !== stamp()) throw new HttpError(400, 'This TikTok connection link expired. Start again from Integrations.');
+    if (!entry || entry.expiresAt < Date.now() || (entry.config !== stamp() || entry.revision !== revision)) throw new HttpError(400, 'This TikTok connection link expired. Start again from Integrations.');
     if (!query.code || query.error) throw new HttpError(400, 'TikTok authorization was cancelled or declined.');
     const config = readConfig();
     const tokens = await tiktokApi('/oauth/token/', { body: new URLSearchParams({ client_key: config.clientKey, client_secret: config.clientSecret, code: text(query.code, 2000), grant_type: 'authorization_code', redirect_uri: config.redirectUri }) });
     if (!tokens.scope?.split(',').includes('video.upload') || !tokens.open_id || !tokens.access_token || !tokens.refresh_token) throw new HttpError(400, 'Authorize video upload for this account and try connecting again.');
     const profile = await tiktokApi('/user/info/?fields=open_id,display_name', { token: tokens.access_token });
     if (profile.user?.open_id !== tokens.open_id) throw new HttpError(400, 'The connected TikTok account could not be verified.');
-    if (entry.config !== stamp()) throw new HttpError(409, 'TikTok settings changed. Connect the account again.');
+    if ((entry.config !== stamp() || entry.revision !== revision)) throw new HttpError(409, 'TikTok settings changed. Connect the account again.');
     state.account = { id: tokens.open_id, name: text(profile.user?.display_name, 80, 'TikTok creator'), access: store.seal(tokens.access_token), refresh: store.seal(tokens.refresh_token), expiry: Date.now() + Number(tokens.expires_in || 0) * 1000 };
     store.save();
   }
   function disconnect() {
     delete state.account;
     pending.clear();
+    revision++;
     store.save();
   }
   async function tokenFor(accountId) {
@@ -146,10 +150,10 @@ export function createTikTok(store) {
     try {
       const token = await tokenFor(item.accountId);
       const payload = await tiktokApi('/post/publish/status/fetch/', { token, body: { publish_id: item.publishId } });
-      if (['SEND_TO_USER_INBOX', 'PUBLISH_COMPLETE'].includes(payload.status)) return update(clip, { state: 'sent', reason: '' });
+      if (['SEND_TO_USER_INBOX', 'PUBLISH_COMPLETE'].includes(payload.status)) return update(clip, { state: 'sent', reason: '', nextCheck: null });
       if (payload.status === 'FAILED') {
         const reason = /^[a-z0-9_]{1,80}$/i.test(payload.fail_reason || '') ? `: ${payload.fail_reason.replaceAll('_', ' ')}` : '';
-        return update(clip, { state: 'failed', reason: `TikTok could not process this draft${reason}.` });
+        return update(clip, { state: 'failed', nextCheck: null, reason: `TikTok could not process this draft${reason}.` });
       }
       if (item.state === 'unconfirmed') return update(clip, { state: 'unconfirmed', reason: 'TikTok is still processing this draft. Check again or look in the TikTok inbox.', nextCheck: null });
       if (item.attempts >= 20) return update(clip, { state: 'unconfirmed', reason: 'TikTok has not confirmed delivery yet. Check the status or your TikTok inbox.', nextCheck: null });
@@ -171,8 +175,8 @@ export function createTikTok(store) {
       }
     } finally { processing = false; }
   }
-  const timer = setInterval(() => { tick().catch(() => {}); }, 4500);
-  timer.unref();
+  const wake = () => tick().catch(() => {});
+  if (background) setInterval(wake, 4500).unref();
   let recovered = false;
   for (const job of store.state.jobs) for (const clip of job.clips || []) {
     if (clip.tiktok?.state === 'uploading') {
@@ -182,7 +186,7 @@ export function createTikTok(store) {
   }
   if (recovered) store.save();
   return {
-    describe, configure, connect, callback, disconnect,
+    describe, configure, connect, callback, disconnect, wake,
     queue(job, { clipIds, consent, accountId }) {
       const account = currentAccount();
       if (!enabled() || !account || account.id !== accountId) throw new HttpError(409, 'Connect and confirm the destination TikTok account first.');

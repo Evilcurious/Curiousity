@@ -11,7 +11,7 @@ const googleStates = {
 };
 export const clipRatio = (frame) => ({ '--clip-ratio': frame.width / frame.height });
 export function clipUploading(clip) {
-  return ['queued', 'uploading', 'processing'].includes(clip.tiktok?.state) || Object.values(clip.googleUploads || {}).some(({ state }) => ['queued', 'uploading'].includes(state));
+  return clip.bufferDraft?.state === 'sending' || ['queued', 'uploading', 'processing'].includes(clip.tiktok?.state) || Object.values(clip.googleUploads || {}).some(({ state }) => ['queued', 'uploading'].includes(state));
 }
 export function availableDestinations(job, clip, google) {
   if (job.status !== 'ready' || !google?.connected) return [];
