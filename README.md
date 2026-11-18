@@ -93,6 +93,19 @@ curl -fsS https://clips.example.com/api/auth/session
 
 The response should contain `"passwordTransport":"https"`. A `blocked` or `local` result at the public URL means the app is not seeing a trusted TLS connection. Verify the proxy forwards a single `X-Forwarded-Proto: https` on actual TLS requests, connects to `127.0.0.1` for `TRUST_PROXY=loopback`, and that the app picked up the setting. If a CDN sits in front of Nginx, use TLS from the CDN to the VPS as well; don't hard-code the forwarded scheme. If one trusted proxy connects over a private non-loopback network (for example the Compose HTTPS overlay), use `TRUST_PROXY=1` instead. Never enable proxy trust on a public backend port.
 
+#### “API route not found” after an update
+
+The browser files and the Node process are separate. `npm run build` updates `dist/`, but a running process can still have the old API loaded. If **Captions** or **Chat** shows this error, restart the **Curiousity service** from the checkout you pulled, not just Nginx or Caddy. Keep its existing `DATA_DIR` and `.key`; no account reset is needed. For systemd, check the unit’s `WorkingDirectory` and restart that unit. For PM2, check the app’s script path and restart that app. For Docker Compose, rebuild and recreate the app with `docker compose up -d --build`, using the same project and `-f` files as your current deployment.
+
+Check the running backend from the VPS, then check the public routing. Use your actual loopback port and HTTPS hostname:
+
+```sh
+curl -fsS http://127.0.0.1:5173/api/auth/session
+curl -fsS https://clips.example.com/api/auth/session
+```
+
+This release includes `"apiFeatures":{"deviceCaptions":true,"personalChat":true}`. If it’s missing locally, verify which process is listening on the app port and that it was restarted from the updated checkout. If it’s present locally but missing at the public URL, check the proxy’s upstream address and any API caching. If both are current but one action still fails, make sure every `/api/` location (including `/api/captions/upload`) forwards the original path. Use `proxy_pass http://127.0.0.1:5173;` **without** a trailing slash in the supplied Nginx snippets. Reload the page after restarting the backend. If reporting a remaining error, include the failing action and the HTTP method, path and status from the browser’s Network tab, not cookies, API keys or passwords.
+
 ### Docker Compose with automatic HTTPS
 
 Use the optional `compose.https.yaml` overlay if no other proxy already listens on ports 80/443. Point a DNS name at the VPS, open ports 80/443, and set `CURIOUSITY_DOMAIN=clips.example.com` in `.env` (hostname only). The overlay starts Caddy with persistent TLS certificates, redirects HTTP, and supplies the app’s `PUBLIC_ORIGIN` and `TRUST_PROXY` settings. If you already have a proxy, use `compose.yaml` and configure it as above instead.

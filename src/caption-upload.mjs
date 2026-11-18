@@ -1,3 +1,5 @@
+import { apiResponseError } from './api-errors.mjs';
+
 export function uploadVideo(file, style, signal, progress) {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
@@ -16,7 +18,7 @@ export function uploadVideo(file, style, signal, progress) {
     request.onload = () => {
       if (request.status === 202 && request.response?.id) return resolve(request.response);
       const fallback = request.status === 413 ? 'The reverse proxy rejected this upload. Ask the server operator to check its upload size limit.' : `Could not upload the video (HTTP ${request.status}).`;
-      reject(new Error(request.response?.error || fallback));
+      reject(apiResponseError(request.status, request.response, { contentType: request.getResponseHeader('Content-Type') || '', fallback }));
     };
     signal.addEventListener('abort', abort, { once: true });
     // A File is sent directly; no FileReader, multipart buffering or base64.

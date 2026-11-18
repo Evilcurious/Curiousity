@@ -219,7 +219,9 @@ function allowPassword(req) {
   else if (proxyMode === 'loopback') hint = 'With TRUST_PROXY=loopback, the proxy must connect to Curiousity at 127.0.0.1 or ::1.';
   throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
-app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req) }));
+// Route support only; media tools and a configured chat model are checked separately.
+const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true });
+app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req), apiFeatures }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
 app.post('/api/auth/signout', (req, res) => { auth.logout(req, res); res.status(204).end(); });
@@ -650,7 +652,7 @@ for (const site of sites) {
   });
   app.post(`/api/${site}/disconnect`, (req, res) => { const service = connections(req.account)[site]; service.disconnect(); res.json(service.describe()); });
 }
-app.use('/api', (_req, _res, next) => next(new HttpError(404, 'API route not found.')));
+app.use('/api', (_req, res) => res.status(404).json({ error: 'No Curiousity API route matches this path and HTTP method.', code: 'API_ROUTE_NOT_FOUND' }));
 
 const watcher = dev ? await (await import('../scripts/build.mjs')).buildWeb({ watch: true }) : null;
 app.use(express.static(webRoot, { dotfiles: 'deny' }));

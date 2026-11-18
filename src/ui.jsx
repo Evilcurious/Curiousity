@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from 'react';
 import { AlertCircle, ArrowRight, Check, LoaderCircle, X } from 'lucide-react';
+import { apiResponseError } from './api-errors.mjs';
 
 export const ACTIVE = new Set(['queued', 'fetching', 'downloading', 'capturing', 'analyzing', 'rendering']);
 export const STATES = { queued: 'In queue', fetching: 'Checking source', downloading: 'Downloading', capturing: 'Capturing live', analyzing: 'Analyzing', rendering: 'Rendering', ready: 'Ready', failed: 'Failed', cancelled: 'Stopped' };
@@ -23,7 +24,7 @@ export async function api(path, opts = {}) {
   }
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload) throw Object.assign(new Error(payload?.error || 'The Curiousity engine could not complete the request.'), { status: response.status });
+  if (!response.ok || !payload) throw apiResponseError(response.status, payload, { contentType: response.headers.get('content-type') || '' });
   return payload;
 }
 
