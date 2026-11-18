@@ -18,6 +18,13 @@ if (trace) globalThis.fetch = async (input, options) => {
     const body = JSON.parse(options.body);
     await appendFile(trace, `${JSON.stringify({ ...base, body })}\n`);
     const latest = body.messages.at(-1).content;
+    if (body.messages[0].content.startsWith('Review a public discovery shortlist.')) {
+      const { criteria, candidates } = JSON.parse(latest);
+      const decisions = criteria.query.includes('AI invalid') ? [{ id: 'made-up-id', keep: true }] : candidates.map(({ id, source }) => ({
+        id, keep: !criteria.query.includes('AI veto all') && !(criteria.query.includes('AI veto') && source === 'instagram'),
+      }));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(decisions) } }] });
+    }
     if (latest === 'Wait for disconnect') {
       try { await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })); }
       finally { await appendFile(trace, `${JSON.stringify({ aborted: true })}\n`); }

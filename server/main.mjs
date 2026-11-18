@@ -13,7 +13,7 @@ import { chatInput } from './chat.mjs';
 import { discover, discoveryEnabled, discoveryInput } from './discovery.mjs';
 import { finderWorkbook } from './finder-xlsx.mjs';
 import { HttpError, captionStyleInput, jobOptions, maxClips, liveLimits, text } from './validation.mjs';
-import { chatWithProvider, compatibleProvider, listModels, providerInput, publicProvider } from './providers.mjs';
+import { chatWithProvider, compatibleProvider, listModels, providerInput, publicProvider, reviewDiscoveryWithProvider } from './providers.mjs';
 import { createTikTok } from './tiktok.mjs';
 import { createGoogle, googleUploadActive, publicGoogleUploads } from './google.mjs';
 import { canUsePremium, createAuth, initializeAdmin, limiter, mustChangePassword, publicAccount } from './accounts.mjs';
@@ -69,7 +69,8 @@ const auth = createAuth(store, { secure, embedded: preview });
 const networkLimit = limiter(60_000);
 const dailySharedLimit = Math.floor(boundedEnv('PREMIUM_DAILY_JOBS', 10, 1, 200));
 const services = new Map();
-const deleting = new Set(), copying = new Set(), chatting = new Set(), searching = new Set();
+const deleting = new Set(), copying = new Set(), chatting = new Set();
+const searching = new Map();
 let current, replayTimer, closing = false, recovering = false;
 
 for (const account of store.state.users) if (repairWorkspace(account)) recovering = true;
@@ -238,7 +239,7 @@ function allowPassword(req) {
   throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
 // Route support only; media tools and a configured chat model are checked separately.
-const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, liveReplay: true });
+const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true });
 app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req), apiFeatures }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
@@ -554,17 +555,31 @@ app.get('/api/captions/:id/:file', (req, res, next) => {
 for (const skill of ['reach', 'finder']) app.post(`/api/chat/${skill}`, async (req, res) => {
   if (!discoveryEnabled) throw new HttpError(503, 'Public search is disabled by the server administrator.');
   const input = discoveryInput(skill, req.body);
+  const { reviewProfileId, reviewRevision } = req.body;
+  let review;
+  if (reviewProfileId !== undefined) {
+    if (typeof reviewProfileId !== 'string' || !reviewProfileId || reviewProfileId.length > 80) throw new HttpError(400, 'Choose one of your saved models for AI review.');
+    const saved = profileById(req, reviewProfileId);
+    if (reviewRevision !== undefined && (saved.revision || saved.id) !== reviewRevision) throw new HttpError(409, 'This AI profile changed. Refresh your workspace before searching again.');
+    if (!saved.model) throw new HttpError(400, 'Choose a chat model for AI review in Settings.');
+    const profile = { ...saved };
+    review = (criteria, candidates, signal) => reviewDiscoveryWithProvider(profile, store, criteria, candidates, signal);
+  }
   const { id } = req.account;
   if (searching.has(id) || searching.size >= 6) throw new HttpError(429, 'Discovery is busy. Wait for the current search to finish.');
   networkLimit(`discovery:${id}`, 6);
   networkLimit('discovery:server', 30);
   const request = responseSignal(res);
-  searching.add(id);
+  if (request.signal.aborted) { request.release(); return; }
+  const releaseSearch = () => { if (searching.get(id) === request) searching.delete(id); };
+  searching.set(id, request);
+  // A reset can start a new search before a cancelled provider call unwinds.
+  request.signal.addEventListener('abort', releaseSearch, { once: true });
   try {
-    const result = await discover(input, request.signal);
+    const result = await discover(input, request.signal, review);
     if (!request.signal.aborted) res.json({ ...result, ...(skill === 'finder' && result.records.length ? { workbook: finderWorkbook(result) } : {}) });
   } catch (error) { if (!request.signal.aborted) throw error; }
-  finally { request.release(); searching.delete(id); }
+  finally { request.release(); request.signal.removeEventListener('abort', releaseSearch); releaseSearch(); }
 });
 
 app.post('/api/chat', async (req, res) => {

@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import { browseFinder, coverageLabels, discoveryNames } from '../shared/discovery.mjs';
+import { availabilityLabels, browseFinder, coverageLabels, discoveryNames, exclusionSummary, lookbackLabel, reviewLabels } from '../shared/discovery.mjs';
 
 const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
@@ -31,7 +31,7 @@ function worksheet(widths, rows, { merged = [], freeze = 0, freezeCols = 0, filt
   const cols = widths.map((width, i) => `<col min="${i + 1}" max="${i + 1}" width="${width}" customWidth="1"/>`).join('');
   const linkTags = links.map(({ ref }, i) => `<hyperlink ref="${ref}" r:id="rId${i + 1}"/>`).join('');
   return {
-    sheet: `${xml}<worksheet xmlns="${main}" xmlns:r="${office}"><dimension ref="A1:${end}"/><sheetViews><sheetView showGridLines="0" workbookViewId="0">${pane}</sheetView></sheetViews><cols>${cols}</cols><sheetData>${matrix}</sheetData>${filter ? `<autoFilter ref="${filter}:${end}"/>` : ''}${merged.length ? `<mergeCells count="${merged.length}">${merged.map((ref) => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>` : ''}${validation ? `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="G5:G${rows.length}"><formula1>"${esc(validation)}"</formula1></dataValidation></dataValidations>` : ''}${links.length ? `<hyperlinks>${linkTags}</hyperlinks>` : ''}</worksheet>`,
+    sheet: `${xml}<worksheet xmlns="${main}" xmlns:r="${office}"><dimension ref="A1:${end}"/><sheetViews><sheetView showGridLines="0" workbookViewId="0">${pane}</sheetView></sheetViews><cols>${cols}</cols><sheetData>${matrix}</sheetData>${filter ? `<autoFilter ref="${filter}:${end}"/>` : ''}${merged.length ? `<mergeCells count="${merged.length}">${merged.map((ref) => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>` : ''}${validation ? `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="H5:H${rows.length}"><formula1>"${esc(validation)}"</formula1></dataValidation></dataValidations>` : ''}${links.length ? `<hyperlinks>${linkTags}</hyperlinks>` : ''}</worksheet>`,
     links: links.length ? rels(links.map(({ href }, i) => rel(`rId${i + 1}`, 'hyperlink', href, true))) : null,
   };
 }
@@ -41,7 +41,7 @@ const fill = (rgb) => `<fill><patternFill patternType="solid"><fgColor rgb="FF${
 const xf = (fontId, fillId) => `<xf numFmtId="0" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1" indent="1"/></xf>`;
 const styles = `${xml}<styleSheet xmlns="${main}"><fonts count="6">${font(11, '203245')}${font(22, 'FFFFFF', '<b/>')}${font(11, 'DAECEB')}${font(11, 'FFFFFF', '<b/>')}${font(11, '1558A0', '<u/>')}${font(11, '203245', '<b/>')}</fonts><fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${fill('172C40')}${fill('14645E')}${fill('FFFFFF')}${fill('F0F6F8')}${fill('EDF7EF')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="10"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>${xf(1, 2)}${xf(2, 2)}${xf(3, 3)}${xf(0, 4)}${xf(0, 5)}${xf(4, 4)}${xf(4, 5)}${xf(5, 5)}${xf(0, 6)}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 
-export function finderWorkbook({ query, location, mode, searchedAt, records, coverage }) {
+export function finderWorkbook({ query, location, mode, days, from, searchedAt, aiReview, records, coverage }) {
   const jobs = mode === 'jobs', resultSheet = jobs ? 'Jobs' : 'Business leads';
   const intro = [
     row([entry('Curiousity / Finder', style.title)], 41),
@@ -55,18 +55,24 @@ export function finderWorkbook({ query, location, mode, searchedAt, records, cov
   }
   info('Search', `${jobs ? 'Jobs' : 'Business leads'} · ${query}`, 31);
   info('Requested location', location || 'Not specified');
-  info('Searched (UTC)', `${searchedAt.slice(0, 16).replace('T', ' ')} · ${records.length} direct ${records.length === 1 ? 'link' : 'links'}`);
+  const utc = (iso) => iso.slice(0, 16).replace('T', ' ');
+  info('Lookback (UTC)', `${lookbackLabel(days)} · Since ${utc(from)}`);
+  info('Search run (UTC)', `${utc(searchedAt)} · ${records.length} ${records.length === 1 ? 'result' : 'results'} passed`);
+  info('Verification', `${reviewLabels[aiReview.state]}${aiReview.state === 'complete' ? ` · ${aiReview.checked} source-checked results reviewed` : ''}`);
   intro.push(row([], 10), section('01  /  SOURCE COVERAGE'));
-  merge.push('A8:E8');
+  merge.push(`A${intro.length}:E${intro.length}`);
   intro.push(row(['Source', 'Links', 'Outcome', 'Method', 'Broader search (not a result)'].map((v) => entry(v, style.header)), 25));
-  for (const { source, method, state, count } of coverage) {
+  for (const { source, method, state, count, excluded } of coverage) {
     intro.push(row([entry(discoveryNames[source], style.label), entry(count), entry(coverageLabels[state]), entry(method), entry(`Browse ${discoveryNames[source]}`, style.link, browseFinder(source, query, location))], 30));
+    const summary = exclusionSummary(excluded);
+    if (summary) info(`${discoveryNames[source]} skips`, summary, 27);
   }
   intro.push(row([], 10), section('02  /  HOW TO USE'));
   merge.push(`A${intro.length}:E${intro.length}`);
   info('1. Open listing', `Open the ${resultSheet} sheet. Follow the source link to confirm ${jobs ? 'the employer, location and application deadline' : 'the business, service area and public contact channel'}.`, 30);
   info('2. Review and track', `Use the filter row to compare results. Update the Status dropdown and add your own ${jobs ? 'application notes' : 'contact notes or next step'}.`, 30);
-  info('3. Check coverage', 'The public index can miss, duplicate or lag listings. Dates and excerpts are from the index; results are not verified or guaranteed current.', 30);
+  info('3. Check coverage', 'Rows passed date and availability checks using public source evidence. Undated, closed and unconfirmed results are excluded. Availability may change after the search.', 38);
+  if (!jobs) info('Lead availability', 'A public contact link or opening hours were visible. This does not guarantee that the business is taking clients. The source date is for the listing, not the age of the business.', 38);
   if (!jobs && coverage.some(({ source }) => source === 'maps')) info('Google Maps', 'Map results are links only. Open each link to review the business on Google Maps; Maps addresses, ratings and reviews are not copied into this workbook.', 30);
   const guide = worksheet([23, 15, 23, 24, 39], intro, { merged: merge });
 
@@ -74,16 +80,16 @@ export function finderWorkbook({ query, location, mode, searchedAt, records, cov
     row([entry(resultSheet, style.title)], 38),
     row([entry('Open each source to verify it. Green columns are for your own tracking.', style.subtitle)], 24),
     row([], 10),
-    row(['#', jobs ? 'Role / listing' : 'Business / listing', 'Source', 'Indexed date (UTC)', 'Source excerpt', 'Source link', 'Status', 'Your notes / next step'].map((v) => entry(v, style.header)), 32),
+    row(['#', jobs ? 'Role / listing' : 'Business / listing', 'Source', 'Source date (UTC)', 'Availability check', 'Source excerpt', 'Source link', 'Status', 'Your notes / next step'].map((v) => entry(v, style.header)), 32),
   ];
-  records.forEach(({ title, source, published, excerpt, url }, i) => {
+  records.forEach(({ title, source, published, availability, excerpt, url }, i) => {
     const band = i % 2 ? style.alt : style.plain;
-    results.push(row([entry(i + 1, band), entry(title, band), entry(discoveryNames[source], band), entry(published || '—', band),
+    results.push(row([entry(i + 1, band), entry(title, band), entry(discoveryNames[source], band), entry(published, band), entry(availabilityLabels[availability], band),
       entry(excerpt || (source === 'maps' ? 'Review this listing in Google Maps.' : '—'), band), entry('Open listing ↗', i % 2 ? style.altLink : style.link, url),
       entry('To verify', style.editable), entry('', style.editable)], excerpt.length > 150 ? 82 : excerpt.length > 70 ? 60 : 48));
   });
-  const data = worksheet([6, 37, 20, 16, 42, 19, 17, 32], results, {
-    merged: ['A1:H1', 'A2:H2'], freeze: 4, freezeCols: 2, filter: 'A4',
+  const data = worksheet([6, 37, 20, 16, 24, 42, 19, 17, 32], results, {
+    merged: ['A1:I1', 'A2:I2'], freeze: 4, freezeCols: 2, filter: 'A4',
     validation: jobs ? 'To verify,Shortlisted,Applied,Not a fit' : 'To verify,Shortlisted,Contacted,Not a fit',
   });
 

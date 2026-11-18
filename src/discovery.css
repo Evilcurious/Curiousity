@@ -27,6 +27,17 @@
 .discovery-seeds { color: var(--quiet); font-size: 11px; }
 .discovery-seeds button { color: var(--muted); font-size: 11px; font-weight: 700; border: 1px solid var(--line-strong); border-radius: 5px; padding: 4px 7px; background: var(--field); }
 .discovery-seeds button:hover { color: var(--accent-text); border-color: var(--accent-line); }
+.discovery-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 8px; }
+.discovery-checks > div { min-width: 0; padding: 10px 12px; background: var(--field); border: 1px solid var(--line); border-radius: 8px; }
+.discovery-checks p { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 6px; overflow-wrap: anywhere; }
+.discovery-checks a { color: var(--accent-text); text-decoration: underline; }
+.discovery-range > div { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.discovery-range .form-field:first-child { flex: 1 1 122px; }
+.discovery-range .form-field + .form-field { flex: 0 1 88px; }
+.discovery-range :is(select, input) { background: var(--panel); }
+.discovery-ai > div { display: flex; align-items: center; gap: 6px; min-height: 20px; font-size: 12px; }
+.discovery-ai > div > svg { color: var(--accent-text); }
+.discovery-ai .switch { flex: 0 0 35px; margin-inline-start: auto; }
 .discovery-submit { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 12px; }
 .discovery-submit > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .discovery-privacy, .discovery-result-note { display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -35,6 +46,10 @@
 .discovery-results { padding: clamp(13px, 2vw, 22px) clamp(16px, 2.7vw, 28px); }
 .discovery-results-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .discovery-results-head > div { min-width: 0; }
+.discovery-results-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.discovery-verification-note { padding: 8px 10px; margin-bottom: 12px; background: var(--green-wash); border: 1px solid var(--line); border-radius: 6px; }
+.discovery-verification-note strong { color: var(--accent-text); }
+.discovery-available { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; color: var(--accent-text); font-size: 11px; font-weight: 800; }
 .discovery-result-query { color: var(--muted); font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
 .discovery-coverage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px; margin-bottom: 13px; }
 .discovery-coverage-card { min-width: 0; border: 1px solid var(--line); background: var(--field); border-radius: 7px; padding: 9px 10px; }

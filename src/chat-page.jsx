@@ -112,7 +112,7 @@ export default function ChatPage({ workspace, onUseSource }) {
       </section>}
       {profile && <p className="privacy-note chat-privacy"><LockKeyhole size={15}/> Conversations stay in this tab until you reload, sign out or switch profiles. Your provider’s data and billing policies still apply.</p>}
     </div>
-    <div id="chat-tool-reach" hidden={tool !== 'reach'}><DiscoveryPane kind="reach" enabled={searchEnabled} onUseSource={onUseSource}/></div>
-    <div id="chat-tool-finder" hidden={tool !== 'finder'}><DiscoveryPane kind="finder" enabled={searchEnabled} prefill={prefill}/></div>
+    <div id="chat-tool-reach" hidden={tool !== 'reach'}><DiscoveryPane kind="reach" enabled={searchEnabled} profile={profile} onUseSource={onUseSource}/></div>
+    <div id="chat-tool-finder" hidden={tool !== 'finder'}><DiscoveryPane kind="finder" enabled={searchEnabled} profile={profile} prefill={prefill}/></div>
   </div>;
 }
