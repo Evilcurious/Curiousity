@@ -1,0 +1,23 @@
+# Optional: docker compose -f compose.yaml -f compose.https.yaml up -d --build
+services:
+  curiousity:
+    environment:
+      PUBLIC_ORIGIN: https://${CURIOUSITY_DOMAIN:?Set CURIOUSITY_DOMAIN to your public DNS name}
+      TRUST_PROXY: '1'
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - curiousity
+    environment:
+      CURIOUSITY_DOMAIN: ${CURIOUSITY_DOMAIN:?Set CURIOUSITY_DOMAIN to your public DNS name}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

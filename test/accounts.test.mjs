@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'undici';
 import { createStore } from '../server/store.mjs';
 import { themes } from '../shared/themes.mjs';
 import { exampleAdmin, memberPassword, startEngine } from './helpers/http.mjs';
@@ -254,4 +255,57 @@ test('temporary admin credentials expire and cannot administer the workspace unt
   assert.equal((await data(await admin.signin(exampleAdmin.email, newPassword))).user.mustChangePassword, false);
   assert.equal((await admin.request('/admin/accounts')).status, 200);
   assert.equal(createStore(root).state.users[0].temporaryPasswordExpiresAt, undefined);
+});
+
+test('public password requests require a trusted HTTPS connection, including after sign-in', async (t) => {
+  const PUBLIC_ORIGIN = 'https://clips.example.test';
+  const host = { Host: new URL(PUBLIC_ORIGIN).host };
+  const http = { ...host, Origin: PUBLIC_ORIGIN.replace('https:', 'http:') };
+  const tls = { ...host, Origin: PUBLIC_ORIGIN, 'X-Forwarded-Proto': 'https' };
+  // Use the lower-level client so Host is forwarded exactly as it would be by the proxy.
+  const send = async (engine, path, headers, method = 'GET', body) => {
+    const result = await httpRequest(`${engine.url}/api${path}`, { method, headers: { 'X-Clipforge': 'workspace', ...(body && { 'Content-Type': 'application/json' }), ...headers }, body: body && JSON.stringify(body) });
+    return { status: result.statusCode, cookie: result.headers['set-cookie'], data: result.statusCode === 204 ? await result.body.dump() : await result.body.json() };
+  };
+  const signin = (engine, headers, credentials = exampleAdmin) => send(engine, '/auth/signin', headers, 'POST', credentials);
+  const direct = await startEngine(t, { env: { DATA_DIR: await temp(t), ...adminEnv, PUBLIC_ORIGIN } });
+  assert.equal((await send(direct, '/auth/session', host)).data.httpsOrigin, PUBLIC_ORIGIN);
+  for (const headers of [http, tls]) {
+    const rejected = await signin(direct, headers);
+    assert.equal(rejected.status, 403);
+    assert.equal(rejected.cookie, undefined);
+    assert.match(rejected.data.error, /require HTTPS/);
+  }
+  assert.equal((await send(direct, '/auth/signup', http, 'POST', { email: 'insecure@example.test', password: memberPassword, confirmPassword: memberPassword })).status, 403);
+  assert.equal((await direct.agent().signin()).status, 200, 'private localhost access still works');
+
+  const deployment = await startEngine(t, { env: { DATA_DIR: await temp(t), ...adminEnv, PUBLIC_ORIGIN, TRUST_PROXY: '1' } });
+  const cleartext = { ...http, 'X-Forwarded-Proto': 'http' };
+  assert.equal((await signin(deployment, cleartext)).status, 403);
+  const login = await signin(deployment, tls);
+  assert.equal(login.status, 200);
+  assert.equal(login.data.user.role, 'admin');
+  assert.match(login.cookie, /HttpOnly; Secure; SameSite=Lax/);
+  assert.doesNotMatch(login.cookie, /Partitioned/);
+  const Cookie = login.cookie.split(';', 1)[0];
+  const replacement = 'different-https-fixture-password';
+  const change = { currentPassword: exampleAdmin.password, newPassword: replacement, confirmPassword: replacement };
+  assert.equal((await send(deployment, '/account/password', { ...cleartext, Cookie }, 'PUT', change)).status, 403);
+  const updated = await send(deployment, '/account/password', { ...tls, Cookie }, 'PUT', change);
+  assert.equal(updated.status, 204);
+  assert.match(updated.cookie, /HttpOnly; Secure; SameSite=Lax/);
+  assert.equal((await signin(deployment, tls)).status, 401);
+  assert.equal((await signin(deployment, tls, { ...exampleAdmin, password: replacement })).status, 200);
+});
+
+test('generated administrator passwords are not created or printed to redirected output', async (t) => {
+  const root = await temp(t);
+  const env = { ...process.env, DATA_DIR: root, ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: '' };
+  await assert.rejects(exec(process.execPath, ['scripts/admin.mjs', '--generate'], { env }), (error) => {
+    assert.equal(error.code, 1);
+    assert.equal(error.stdout, '');
+    assert.match(error.stderr, /interactive terminal/);
+    return true;
+  });
+  assert.equal(createStore(root).state.users.length, 0);
 });

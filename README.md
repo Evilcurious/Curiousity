@@ -30,25 +30,34 @@ Enter and confirm a new unique password of at least 14 characters. Your input is
 
 `npm run admin` creates the administrator once. With an existing installation, it adopts the old single-user clips, keys and integrations **privately** under that administrator. It does not automatically list any exports for other members. Keep using the same data directory rather than renaming `.clipforge/`. If you set `ADMIN_EMAIL` in `.env` before provisioning, that email is reserved from self-registration. The CLI will not promote an existing member using that email. To rotate the administrator password and revoke all its sessions, stop the app and use the same procedure with `npm run admin -- --reset`. The administrator email must match the existing one. You can remove legacy `AUTH_USER` and `AUTH_PASSWORD` settings; they are no longer used.
 
-To change your password in the app, go to **Settings → Account → Change password**. Enter the current password and confirm a new one. This signs out every session for your account; sign in again with the new password. If you are provisioning an expiring administrator credential, `npm run admin -- --temporary` marks it for replacement on first sign-in and it expires after 24 hours. Use `--reset` as above to recover a forgotten administrator password from the host.
+There is no default password. To generate one instead of typing it, run this in your private SSH terminal with the app stopped:
+
+```sh
+ADMIN_EMAIL='admin@example.com' npm run admin -- --generate
+```
+
+`--generate` prints a unique temporary password once to the terminal, never to redirected output. Only its hash is saved. It expires after 24 hours, and the app requires a replacement before allowing access to the workspace. Add `--reset` after `--generate` only to recover an existing administrator account; this revokes its sessions. To enter your own temporary password instead, use `--temporary`.
+
+To change your password in the app, go to **Settings → Account → Change password**. Enter the current password and confirm a new one. This signs out every session for your account; sign in again with the new password.
 
 If upgrading a clone on this branch, stop the running server, back up as above, run `git pull --ff-only origin arena/e2b88358-curiousity`, then `npm ci`, `npm run setup`, the admin command, and restart. On a normal startup after provisioning, **no admin password environment variable is needed**.
 
 ## Run on a VPS or with Compose
 
-Use a persistent Node service with FFmpeg and a writable data directory. Curiousity is not a static app or a serverless workload. Set `PUBLIC_ORIGIN` to your site’s HTTPS origin, and use `TRUST_PROXY=1` when exactly one trusted proxy forwards requests. Keep the Node listener private on port 5173, unreachable from the internet. Do not expose `npm run dev`.
+Use a persistent Node service with FFmpeg and a writable data directory. Curiousity is not a static app or a serverless workload. **Public sign-in requires HTTPS.** `http://VPS_IP:5173` is not a sign-in URL. Keep the Node listener private on `127.0.0.1:5173` and do not expose `npm run dev`.
 
-```sh
-cp .env.example .env
-# Configure ADMIN_EMAIL, PUBLIC_ORIGIN, TRUST_PROXY, and ALLOW_SIGNUP.
-npm ci
-npm run setup
-# Provision the admin locally as shown above before making the app public.
-npm run build
-npm start
+### Node with an HTTPS reverse proxy
+
+On a fresh install, copy `.env.example` to `.env`. Set `ADMIN_EMAIL` and consider `ALLOW_SIGNUP=false` for a private instance. Set these values when **one trusted HTTPS reverse proxy** is in front of the private Node listener:
+
+```dotenv
+PUBLIC_ORIGIN=https://clips.example.com
+TRUST_PROXY=1
 ```
 
-For example, with Caddy and DNS pointing to your VPS:
+Replace `clips.example.com` with your hostname. Install and build with `npm ci`, `npm run setup`, and `npm run build`. Provision the admin as shown above before starting `npm start`. Use a process manager such as systemd to keep the app running.
+
+Point DNS at the VPS and allow inbound ports 80 and 443. For Caddy, this site config serves HTTPS and redirects HTTP automatically:
 
 ```caddyfile
 clips.example.com {
@@ -56,7 +65,48 @@ clips.example.com {
 }
 ```
 
-Configure a process manager such as systemd to keep the service running. With Docker Compose, `docker compose build` builds the image. Before the first run or migration, run `ADMIN_EMAIL=admin@example.com docker compose run --rm -e ADMIN_EMAIL curiousity npm run admin` in a terminal and enter your password when prompted. Then run `docker compose up -d`. Compose binds to `127.0.0.1:5173`; `CURIOUSITY_PORT` overrides the host port. When upgrading from the old Compose service, use `docker compose down` **without `-v`** in the original checkout first so the existing workspace volume is retained.
+If you use Nginx, configure TLS and redirect port 80 to HTTPS. In the HTTPS virtual host, proxy to the private listener and have Nginx overwrite the forwarded headers:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:5173;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+If the browser already shows `https://` but Curiousity reports that password requests require HTTPS, check that the app reads `TRUST_PROXY=1` and that the proxy sets `X-Forwarded-Proto: https` for actual HTTPS requests. Restart the app after changing its environment. Do not enable proxy trust on a public backend port.
+
+### Docker Compose with automatic HTTPS
+
+Use the optional `compose.https.yaml` overlay if no other proxy already listens on ports 80/443. Point a DNS name at the VPS, open ports 80/443, and set `CURIOUSITY_DOMAIN=clips.example.com` in `.env` (hostname only). The overlay starts Caddy with persistent TLS certificates, redirects HTTP, and supplies the app’s `PUBLIC_ORIGIN` and `TRUST_PROXY` settings. If you already have a proxy, use `compose.yaml` and configure it as above instead.
+
+Build the image and, if no admin exists, provision it from an interactive terminal while the app is stopped. Replace the example email:
+
+```sh
+docker compose build
+docker compose stop curiousity
+docker compose run --rm -e ADMIN_EMAIL=admin@example.com curiousity npm run admin -- --generate
+```
+
+Then start the HTTPS deployment and open `https://clips.example.com`:
+
+```sh
+docker compose -f compose.yaml -f compose.https.yaml up -d
+```
+
+Run these from your existing Compose project directory, with the same project name if you use `-p`, to keep its workspace volume. For code updates, add `--build` to `up -d`. The backend remains bound to `127.0.0.1:5173` on the host; `CURIOUSITY_PORT` overrides that host port. When upgrading from the old Compose service, use `docker compose down` **without `-v`** in the original checkout first so the existing workspace volume is retained.
+
+### No domain? Use an SSH tunnel for private access
+
+Keep the backend port private and run this **on your computer**, not on the VPS:
+
+```sh
+ssh -N -L 127.0.0.1:5173:127.0.0.1:5173 your-user@VPS_IP
+```
+
+Keep the tunnel open and visit <http://localhost:5173> in your browser. The HTTP connection only runs on loopback at both ends; traffic between your computer and the VPS is encrypted by SSH. If you use Compose without a public proxy, start it with `docker compose up -d` (no HTTPS overlay). This option is for private access, not for public Buffer media links or external HTTPS OAuth callbacks.
 
 Use one app process per data directory. Back up `.clipforge/` (or `DATA_DIR` / the Docker `/data` volume) **including `.key`**. The key lives alongside encrypted integration credentials; protect access to both, and to `.env` and backups. `MAX_SOURCE_MINUTES` defaults to 180 and `MAX_SOURCE_MB` to 2048. Temporary working media is removed after a job; delete old projects to reclaim export space. Saved library copies keep their media even after the original is removed.
 

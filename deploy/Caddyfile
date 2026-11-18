@@ -1,0 +1,3 @@
+{$CURIOUSITY_DOMAIN} {
+    reverse_proxy curiousity:5173
+}

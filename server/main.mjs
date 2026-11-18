@@ -32,6 +32,7 @@ if (process.env.PUBLIC_ORIGIN) {
 const app = express();
 app.disable('x-powered-by');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
+else if (publicOrigin) console.warn('PUBLIC_ORIGIN is set. For HTTPS behind a reverse proxy, set TRUST_PROXY=1 only when the backend is private and one trusted proxy sets X-Forwarded-Proto.');
 const server = createServer(app);
 const webRoot = join(ROOT, 'dist');
 const store = createStore();
@@ -165,9 +166,11 @@ app.use('/api', express.json({ limit: '192kb' }));
 
 const authResponse = (account) => ({ user: publicAccount(account), branding: publicBrand(store), allowSignup: auth.allowSignup });
 function allowPassword(req) {
-  if (!secure(req) && !loopback.has(req.hostname)) throw new HttpError(403, 'Use HTTPS for this password request. HTTP is only for localhost.');
+  if (!secure(req) && !loopback.has(req.hostname)) {
+    throw new HttpError(403, 'Password requests require HTTPS. If you already opened the HTTPS site, check that the trusted reverse proxy forwards X-Forwarded-Proto and Curiousity has TRUST_PROXY=1.');
+  }
 }
-app.get('/api/auth/session', (req, res) => res.json(authResponse(auth.identify(req))));
+app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
 app.post('/api/auth/signout', (req, res) => { auth.logout(req, res); res.status(204).end(); });
