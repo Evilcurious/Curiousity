@@ -129,7 +129,7 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         if (err.status === 401) { authActions.current.onSignedOut(); return; }
         setProjectsLoaded(true); setProjectsError(err.message);
       }
-      if (!ctrl.signal.aborted) timer = setTimeout(load, currentProjects.current.some((p) => ACTIVE.has(p.status) || p.clips.some(clipUploading)) ? 1100 : 5000);
+      if (!ctrl.signal.aborted) timer = setTimeout(load, currentProjects.current.some((p) => (ACTIVE.has(p.status) && p.status !== 'waiting_replay') || p.clips.some(clipUploading)) ? 1100 : 5000);
     }
     load();
     return () => { ctrl.abort(); clearTimeout(timer); };
@@ -152,6 +152,11 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
   };
   function openProject(project) { updateProject(project); window.location.hash = `#/project/${project.id}`; }
   async function createProject(options) { openProject(await api('/projects', { method: 'POST', body: options })); }
+  function useDiscoverySource(url, live) {
+    setFields((previous) => ({ ...previous, url, mode: live ? 'replay' : 'auto' }));
+    window.location.hash = '#/studio';
+    notify('YouTube link added. Review the settings before generating clips.');
+  }
   async function removeProject(id) {
     await api(`/projects/${id}`, { method: 'DELETE' });
     ++requestVersion.current;
@@ -194,7 +199,7 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         {route.page === 'project' && <Project key={route.id} job={current} loading={!projectsLoaded} loadError={projectsError} workspace={workspace} createProject={createProject} updateProject={updateProject} removeProject={removeProject} notify={notify}/>}
         {route.page === 'settings' && <><SettingsTabs tab={route.tab} user={user}/>{settings()}</>}
         {route.page === 'captions' && <CaptionsPage workspace={workspace} notify={notify}/>}
-        <div hidden={route.page !== 'chat'}><ChatPage workspace={workspace}/></div>
+        <div hidden={route.page !== 'chat'}><ChatPage workspace={workspace} onUseSource={useDiscoverySource}/></div>
         {route.page === 'setup' && <Setup workspace={workspace} refresh={refresh} notify={notify}/>}
       </main>
     </div>

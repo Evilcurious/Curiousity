@@ -10,6 +10,8 @@ import { processProject } from './media.mjs';
 import { captionFiles, captionInputPath, captionJobPublic, isCaptionJob, processCaptionJob } from './device-captions.mjs';
 import { receiveVideo, responseSignal } from './caption-upload.mjs';
 import { chatInput } from './chat.mjs';
+import { discover, discoveryEnabled, discoveryInput } from './discovery.mjs';
+import { finderWorkbook } from './finder-xlsx.mjs';
 import { HttpError, captionStyleInput, jobOptions, maxClips, liveLimits, text } from './validation.mjs';
 import { chatWithProvider, compatibleProvider, listModels, providerInput, publicProvider } from './providers.mjs';
 import { createTikTok } from './tiktok.mjs';
@@ -22,6 +24,7 @@ import { allocateVideoLink, bufferId, bufferMediaUrl, bufferOrganizations, buffe
 import { externalUrl } from './outbound.mjs';
 import { hasTheme } from '../shared/themes.mjs';
 import { ROOT, toolsStatus } from './tools.mjs';
+import { replayWaitMinutes, replayWaiting } from './replay.mjs';
 
 const dev = process.argv.includes('--dev');
 const host = process.env.HOST || '127.0.0.1';
@@ -66,12 +69,17 @@ const auth = createAuth(store, { secure, embedded: preview });
 const networkLimit = limiter(60_000);
 const dailySharedLimit = Math.floor(boundedEnv('PREMIUM_DAILY_JOBS', 10, 1, 200));
 const services = new Map();
-const deleting = new Set(), copying = new Set(), chatting = new Set();
-let current, closing = false, recovering = false;
+const deleting = new Set(), copying = new Set(), chatting = new Set(), searching = new Set();
+let current, replayTimer, closing = false, recovering = false;
 
 for (const account of store.state.users) if (repairWorkspace(account)) recovering = true;
 for (const job of store.state.jobs) {
-  if (activeStatuses.has(job.status) && job.status !== 'queued') {
+  if (job.status === 'fetching' && job.replayWait) {
+    job.status = replayWaiting;
+    job.detail = 'Waiting for the next replay check.';
+    await rm(join(jobDir(job.id), 'work'), { recursive: true, force: true });
+    recovering = true;
+  } else if (activeStatuses.has(job.status) && !['queued', replayWaiting].includes(job.status)) {
     job.status = 'failed';
     job.detail = 'The server restarted before this project finished.';
     job.error = job.detail;
@@ -157,8 +165,16 @@ function touch(job, changes) {
 }
 async function work() {
   if (current || closing) return;
-  const job = [...store.state.jobs].reverse().find((item) => item.status === 'queued' && item.ownerId);
-  if (!job) return;
+  clearTimeout(replayTimer);
+  const now = Date.now();
+  const checkAt = (item) => Number(item.replayWait?.nextCheckAt) || 0;
+  const queue = [...store.state.jobs].reverse().filter((item) => item.ownerId && ['queued', replayWaiting].includes(item.status));
+  const job = queue.find((item) => item.status === 'queued' || checkAt(item) <= now);
+  if (!job) {
+    // Waiting replays survive a restart and do not hold the media worker.
+    if (queue.length) replayTimer = setTimeout(work, Math.max(1, Math.min(...queue.map(checkAt)) - now)).unref();
+    return;
+  }
   const account = store.state.users.find((user) => user.id === job.ownerId);
   if (!account) { touch(job, { status: 'failed', detail: 'The project owner no longer exists.' }); queueMicrotask(work); return; }
   const ctrl = new AbortController();
@@ -169,8 +185,10 @@ async function work() {
     await process(job, scopedStore(store, account), session, (changes) => touch(job, changes));
   }
   catch (error) {
-    if (ctrl.signal.aborted) touch(job, { status: 'cancelled', detail: 'Project stopped.' });
-    else {
+    if (ctrl.signal.aborted) {
+      if (closing && job.status === 'fetching' && job.replayWait) touch(job, { status: replayWaiting, detail: 'Waiting for the next replay check.' });
+      else touch(job, { status: 'cancelled', detail: 'Project stopped.' });
+    } else {
       const detail = (isCaptionJob(job) && (error.code || error instanceof SyntaxError)) ? 'Video processing failed. Check the source and available disk space.' : error.message || 'Project processing failed.';
       touch(job, { status: 'failed', error: detail, detail });
     }
@@ -220,7 +238,7 @@ function allowPassword(req) {
   throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
 // Route support only; media tools and a configured chat model are checked separately.
-const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true });
+const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, liveReplay: true });
 app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req), apiFeatures }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
@@ -269,7 +287,7 @@ app.get('/api/workspace', async (req, res) => {
   res.json({ online: true, tools: await toolsStatus(), user: publicAccount(req.account), branding: publicBrand(store),
     providers: providers.map(publicProviderFor), sharedProviders: sharedProviders(store, req.account).map(sharedProviderCard),
     activeProviderId: req.scoped.chatProfile(activeProviderId) ? activeProviderId : null, captions, mcps: mcps.map(publicMcp),
-    tiktok: tiktok.describe(), google: google.describe(), bufferCanHost: Boolean(publicOrigin), maxClips, liveLimits, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
+    tiktok: tiktok.describe(), google: google.describe(), discoveryEnabled, bufferCanHost: Boolean(publicOrigin), maxClips, liveLimits, replayWaitMinutes, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
 });
 app.put('/api/account/theme', (req, res) => {
   const theme = req.body?.theme;
@@ -339,7 +357,10 @@ app.post('/api/projects', async (req, res) => {
 app.get('/api/projects/:id', (req, res) => res.json(jobPublic(jobById(req))));
 app.post('/api/projects/:id/cancel', (req, res) => {
   const job = jobById(req);
-  if (current?.job === job && activeStatuses.has(job.status)) {
+  if (job.status === replayWaiting) {
+    touch(job, { status: 'cancelled', detail: 'Stopped waiting for this replay.' });
+    queueMicrotask(work);
+  } else if (current?.job === job && activeStatuses.has(job.status)) {
     if (!current.ctrl.signal.aborted) current.ctrl.abort(new Error('Project stopped.'));
   } else if (job.status === 'queued') touch(job, { status: 'cancelled', detail: 'Project removed from the queue.' });
   res.json(jobPublic(job));
@@ -530,6 +551,22 @@ app.get('/api/captions/:id/:file', (req, res, next) => {
   else res.sendFile(path, { dotfiles: 'allow' }, done);
 });
 
+for (const skill of ['reach', 'finder']) app.post(`/api/chat/${skill}`, async (req, res) => {
+  if (!discoveryEnabled) throw new HttpError(503, 'Public search is disabled by the server administrator.');
+  const input = discoveryInput(skill, req.body);
+  const { id } = req.account;
+  if (searching.has(id) || searching.size >= 6) throw new HttpError(429, 'Discovery is busy. Wait for the current search to finish.');
+  networkLimit(`discovery:${id}`, 6);
+  networkLimit('discovery:server', 30);
+  const request = responseSignal(res);
+  searching.add(id);
+  try {
+    const result = await discover(input, request.signal);
+    if (!request.signal.aborted) res.json({ ...result, ...(skill === 'finder' && result.records.length ? { workbook: finderWorkbook(result) } : {}) });
+  } catch (error) { if (!request.signal.aborted) throw error; }
+  finally { request.release(); searching.delete(id); }
+});
+
 app.post('/api/chat', async (req, res) => {
   const { providerId, messages } = chatInput(req.body);
   const profile = profileById(req, providerId);
@@ -670,6 +707,7 @@ server.listen(port, host, () => {
 });
 for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => {
   closing = true;
+  clearTimeout(replayTimer);
   current?.ctrl.abort(new Error('Server is stopping.'));
   server.close(() => { if (watcher) watcher.dispose().finally(() => process.exit(0)); else process.exit(0); });
   setTimeout(() => process.exit(0), 4500).unref();

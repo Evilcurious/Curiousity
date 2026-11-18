@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Captions, Cpu, FileText, LockKeyhole, MessageSquare, Plus, Send, Sparkles, Square, UserRound } from 'lucide-react';
+import { ArrowUpRight, Captions, Cpu, FileSpreadsheet, FileText, LockKeyhole, MessageSquare, Plus, Radar, Send, Sparkles, Square, UserRound } from 'lucide-react';
 import { chatContext, chatLimits } from '../shared/chat.mjs';
 import { providerCatalog } from '../shared/providers.mjs';
+import { finderCommand } from '../shared/discovery.mjs';
+import DiscoveryPane from './discovery.jsx';
 import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, PageHeading } from './ui.jsx';
 import { Select } from './forms.jsx';
 import './media-workspaces.css';
@@ -20,7 +22,7 @@ function Message({ role, content, profile, truncated }) {
   </article>;
 }
 
-function Conversation({ profile, profiles, onSelect }) {
+function Conversation({ profile, profiles, onSelect, onFinder }) {
   const [history, setHistory] = useState([]), [draft, setDraft] = useState(''), [pending, setPending] = useState(null), [error, setError] = useState(''), [reset, setReset] = useState(false);
   const request = useRef(null), composer = useRef(null), transcript = useRef(null);
   const mounted = useRef(true);
@@ -33,6 +35,8 @@ function Conversation({ profile, profiles, onSelect }) {
     event.preventDefault();
     const content = draft.trim();
     if (!content || request.current) return;
+    const find = finderCommand(content);
+    if (onFinder && find !== null) { onFinder(find); setDraft(''); setError(''); return; }
     const ctrl = new AbortController();
     request.current = ctrl;
     setDraft(''); setPending(content); setError('');
@@ -84,16 +88,31 @@ function Conversation({ profile, profiles, onSelect }) {
   </section>;
 }
 
-export default function ChatPage({ workspace }) {
-  const [selection, setSelection] = useState('');
+const chatTools = [
+  { id: 'conversation', icon: MessageSquare, name: 'Conversation' },
+  { id: 'reach', icon: Radar, name: 'Reach' },
+  { id: 'finder', icon: FileSpreadsheet, name: 'Finder' },
+];
+
+export default function ChatPage({ workspace, onUseSource }) {
+  const [selection, setSelection] = useState(''), [tool, setTool] = useState('conversation'), [prefill, setPrefill] = useState(null);
   const profiles = (workspace?.providers || []).filter((profile) => profile.model);
   const profile = profiles.find((item) => item.id === selection) || profiles.find((item) => item.id === workspace?.activeProviderId) || profiles[0];
+  const searchEnabled = workspace?.discoveryEnabled !== false;
   useEffect(() => { if (profile && profile.id !== selection) setSelection(profile.id); }, [profile?.id, selection]);
+  function openFinder(query) { setPrefill({ query }); setTool('finder'); }
   return <div className="view-enter chat-workspace">
-    <PageHeading label="WORKSPACE / PERSONAL AI" title="Chat" subtitle="Start a conversation with one of your own saved models. No Premium access needed."><ActionLink icon={Cpu} href="#/settings/providers">Manage providers</ActionLink></PageHeading>
-    {profile ? <Conversation key={`${profile.id}:${profile.revision || ''}`} profile={profile} profiles={profiles} onSelect={setSelection}/> : <section className="panel chat-unconfigured">
-      <EmptyState icon={MessageSquare} title={workspace ? 'Connect a model to start' : 'Loading your AI profiles…'} action={workspace && <ActionLink icon={Plus} tone="primary" href="#/settings/providers">Set up a chat model</ActionLink>}>{workspace ? 'Add an AI provider in Settings and choose a chat model ID. Your API key stays on the server.' : 'Your saved chat models will appear here.'}</EmptyState>
-    </section>}
-    {profile && <p className="privacy-note chat-privacy"><LockKeyhole size={15}/> Conversations stay in this tab until you reload, sign out or switch profiles. Your provider’s data and billing policies still apply.</p>}
+    <PageHeading label="WORKSPACE / PERSONAL AI" title="Chat" subtitle="Talk with a saved model or use Reach and Finder to search public sources."><ActionLink icon={Cpu} href="#/settings/providers">Manage providers</ActionLink></PageHeading>
+    <div className="chat-tool-strip" role="group" aria-label="Chat tools">
+      {chatTools.map(({ id, icon: Icon, name }) => <button key={id} type="button" aria-pressed={tool === id} aria-controls={`chat-tool-${id}`} onClick={() => setTool(id)}><Icon size={16}/>{name}</button>)}
+    </div>
+    <div id="chat-tool-conversation" hidden={tool !== 'conversation'}>
+      {profile ? <Conversation key={`${profile.id}:${profile.revision || ''}`} profile={profile} profiles={profiles} onSelect={setSelection} onFinder={openFinder}/> : <section className="panel chat-unconfigured">
+        <EmptyState icon={MessageSquare} title={workspace ? 'Connect a model to start' : 'Loading your AI profiles…'} action={workspace && <ActionLink icon={Plus} tone="primary" href="#/settings/providers">Set up a chat model</ActionLink>}>{workspace ? 'Add an AI provider in Settings to chat. Reach and Finder work without a model.' : 'Your saved chat models will appear here.'}</EmptyState>
+      </section>}
+      {profile && <p className="privacy-note chat-privacy"><LockKeyhole size={15}/> Conversations stay in this tab until you reload, sign out or switch profiles. Your provider’s data and billing policies still apply.</p>}
+    </div>
+    <div id="chat-tool-reach" hidden={tool !== 'reach'}><DiscoveryPane kind="reach" enabled={searchEnabled} onUseSource={onUseSource}/></div>
+    <div id="chat-tool-finder" hidden={tool !== 'finder'}><DiscoveryPane kind="finder" enabled={searchEnabled} prefill={prefill}/></div>
   </div>;
 }

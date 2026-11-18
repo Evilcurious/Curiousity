@@ -10,7 +10,7 @@ export const dataRoot = resolve(process.env.DATA_DIR || '.clipforge');
 export const maxSourceSeconds = boundedEnv('MAX_SOURCE_MINUTES', 180, 1, 720) * 60;
 export const maxSourceBytes = boundedEnv('MAX_SOURCE_MB', 2048, 10, 16384) * 1024 * 1024;
 export const jobDir = (id) => join(dataRoot, 'projects', id);
-export const activeStatuses = new Set(['uploading', 'queued', 'fetching', 'downloading', 'capturing', 'analyzing', 'rendering']);
+export const activeStatuses = new Set(['uploading', 'queued', 'waiting_replay', 'fetching', 'downloading', 'capturing', 'analyzing', 'rendering']);
 
 export function createStore(root = dataRoot) {
   mkdirSync(root, { recursive: true, mode: 0o700 });

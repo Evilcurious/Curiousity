@@ -33,7 +33,7 @@ export function Library({ projects, shared, user, loading, error, createProject,
   </div>;
 }
 
-const stepIndex = { queued: 0, fetching: 0, downloading: 0, capturing: 0, analyzing: 1, rendering: 2, ready: 3 };
+const stepIndex = { queued: 0, waiting_replay: 0, fetching: 0, downloading: 0, capturing: 0, analyzing: 1, rendering: 2, ready: 3 };
 function Processing({ job, onCancel, onFinish, busy }) {
   const stage = stepIndex[job.status];
   return <section className="panel processing-panel">
@@ -41,7 +41,7 @@ function Processing({ job, onCancel, onFinish, busy }) {
     <progress max="100" value={job.progress} aria-label="Project progress"/>
     <div className="stepper">{['Source', 'Analyze', 'Render', 'Ready'].map((label, index) => <div className={stage >= index ? 'step-active' : ''} key={label}><span>{stage > index ? <Check size={13}/> : String(index + 1).padStart(2, '0')}</span>{label}</div>)}</div>
     <div className="processing-footer">
-      <p>{job.status === 'capturing' ? <><Radio size={15}/>{timecode(job.capturedSeconds || 0)} / {timecode(job.captureLimitSeconds || job.options.liveMinutes * 60)} captured</> : <><Info size={15}/>You can leave this page while the engine works.</>}</p>
+      <p>{job.status === 'capturing' ? <><Radio size={15}/>{timecode(job.capturedSeconds || 0)} / {timecode(job.captureLimitSeconds || job.options.liveMinutes * 60)} captured</> : job.status === 'waiting_replay' ? <><Info size={15}/>You can close this page. Curiousity will check again automatically.</> : <><Info size={15}/>You can leave this page while the engine works.</>}</p>
       <div>{job.status === 'capturing' && <Button tone="primary" icon={Sparkles} onClick={onFinish} disabled={(job.capturedSeconds || 0) < 6} busy={busy}>Analyze now</Button>}<Button icon={Square} onClick={onCancel}>Stop project</Button></div>
     </div>
   </section>;

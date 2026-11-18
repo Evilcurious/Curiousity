@@ -43,7 +43,7 @@ export function jobOptions(body = {}) {
   const source = demo ? null : youtubeSource(body.url);
   const count = body.count === 'auto' ? 'auto' : ['string', 'number'].includes(typeof body.count) ? Number(body.count) : NaN;
   if (count !== 'auto' && (!Number.isInteger(count) || count < 1 || count > maxClips)) throw new HttpError(400, `Choose Auto or enter a clip count from 1 to ${maxClips}.`);
-  const mode = ['auto', 'recorded', 'live'].includes(body.mode) ? body.mode : 'auto';
+  const mode = ['auto', 'recorded', 'live', 'replay'].includes(body.mode) ? body.mode : 'auto';
   const liveMinutes = liveLimits.includes(Number(body.liveMinutes)) ? Number(body.liveMinutes) : 2;
   const platform = body.platform ?? 'universal';
   if (typeof platform !== 'string' || !Object.hasOwn(platforms, platform)) throw new HttpError(400, 'Choose a supported export platform.');

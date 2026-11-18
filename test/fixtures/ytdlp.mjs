@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { copyFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-const id = args.at(-1).split('v=').at(-1);
+const target = args.at(-1);
+const id = target.endsWith('/@fixture-channel/live') ? 'WaitReplayA' : target.split('v=').at(-1);
 const base = 'https://manifest.googlevideo.com/';
 const master = `${base}master.m3u8`;
 const hls = (file, extra = {}) => ({ protocol: 'm3u8_native', vcodec: 'h264', acodec: 'aac', height: 720, url: `${base}${file}.m3u8`, ...extra });
@@ -18,6 +19,15 @@ const vtt = {
   es: 'WEBVTT\n\n00:00:00.000 --> 00:00:03.400\nUn buen vídeo empieza con un gancho.\n\n00:00:03.400 --> 00:00:07.900\nCumple lo que prometes en la primera frase.\n',
 };
 if (args.includes('--version')) console.log('fixture');
+else if (process.env.FIXTURE_REPLAY_STATE && args.includes('--dump-single-json') && id.startsWith('WaitReplay')) {
+  const states = JSON.parse(readFileSync(process.env.FIXTURE_REPLAY_STATE, 'utf8'));
+  const state = states[id] || 'was_live';
+  if (process.env.FIXTURE_REPLAY_TRACE) appendFileSync(process.env.FIXTURE_REPLAY_TRACE, `${JSON.stringify({ target, state })}\n`);
+  if (state === 'post_live_error') { console.error('ERROR: [youtube] This livestream is still being processed.'); process.exit(1); }
+  if (state === 'private') { console.error('ERROR: [youtube] This video is private.'); process.exit(1); }
+  console.log(JSON.stringify({ id, title: 'Fixture scheduled replay', channel: 'Fixture creator', duration: 12, is_live: state === 'is_live',
+    live_status: state === 'was_live_empty' ? 'was_live' : state, ...(state === 'was_live_empty' ? { formats: [] } : {}) }));
+}
 else if (args.includes('--dump-single-json') && Object.hasOwn(streams, id)) console.log(JSON.stringify({ title: 'Fixture livestream', is_live: true, live_status: 'is_live', formats: streams[id] }));
 else if (args.includes('--dump-single-json')) console.log(JSON.stringify({
   title: 'Fixture replay', channel: 'Fixture creator', duration: 41, live_status: 'was_live', was_live: true, language: 'en',

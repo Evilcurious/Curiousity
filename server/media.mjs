@@ -6,9 +6,10 @@ import { runWhisper } from './transcription.mjs';
 import { maxSourceBytes, maxSourceSeconds, jobDir } from './store.mjs';
 import { buildCandidates, clipCues, normalizeCues, parseVtt, pickAutoMoments, pickMoments } from './moments.mjs';
 import { makeAss, makeSrt } from './captions.mjs';
-import { maxClips } from './validation.mjs';
+import { maxClips, youtubeSource } from './validation.mjs';
 import { rankWithProvider, transcribeRemote } from './providers.mjs';
 import { liveArgs, livePlans, livePlanKey } from './live.mjs';
+import { checkReplayDeadline, planReplayCheck, replayState } from './replay.mjs';
 import { exportFrame, languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { localizeClips, suggestHashtags } from './localization.mjs';
 
@@ -29,6 +30,8 @@ function sourceError(error) {
   return 'Could not read this YouTube source. Check the URL and try updating yt-dlp with npm run setup.';
 }
 
+class ReplayProcessing extends Error {}
+
 async function getMetadata(url, signal, extended = false) {
   try {
     const result = await runYt(['--skip-download', '--ignore-no-formats-error', '--dump-single-json', '--no-warnings', ...(extended ? ['--extractor-args', 'youtube:formats=incomplete'] : []), '--', url], { signal, timeout: 90_000, maxOutput: 25 * 1024 * 1024 });
@@ -37,6 +40,7 @@ async function getMetadata(url, signal, extended = false) {
     return meta;
   } catch (error) {
     if (signal.aborted) throw signal.reason;
+    if (/post[_ -]live|(?:livestream|live stream|replay)[^\n]*still (?:being )?process/i.test(error.output || '')) throw new ReplayProcessing('YouTube is still processing this replay.');
     throw new Error(sourceError(error));
   }
 }
@@ -333,14 +337,30 @@ export async function processProject(job, store, session, update) {
       ({ audio } = await audioProfile(demoAudio, signal));
     } else {
       update({ status: 'fetching', progress: 4, detail: 'Checking this link and detecting the source type.' });
-      meta = await getMetadata(options.url, signal);
+      checkReplayDeadline(job);
+      try { meta = await getMetadata(options.url, signal); }
+      catch (error) { if (!(error instanceof ReplayProcessing) || options.mode === 'live') throw error; }
+      signal.throwIfAborted();
+      const waiting = meta ? replayState(meta, options.mode) : 'processing';
+      if (waiting) {
+        // Freeze the video ID before waiting. /@channel/live can change to a
+        // different broadcast after the current one ends.
+        let source;
+        try { source = youtubeSource(`https://www.youtube.com/watch?v=${options.id || meta?.id || ''}`); }
+        catch { throw new Error('Use the individual YouTube stream or replay link, not the channel’s /live page, to wait for the same broadcast.'); }
+        const title = String(meta?.title || job.title).trim().slice(0, 180);
+        const creator = String(meta?.channel || meta?.uploader || job.creator || '').slice(0, 90);
+        update({ ...planReplayCheck(job, waiting), title, creator, options: { ...options, ...source } });
+        return;
+      }
       isLive = meta.is_live === true || meta.live_status === 'is_live';
-      if (meta.live_status === 'is_upcoming') throw new Error('This livestream has not started yet. Try again once it is live.');
-      if (meta.live_status === 'post_live' && !isLive) throw new Error('YouTube is still processing this replay. Try again after the video becomes available.');
-      if (!isLive && options.mode === 'live') throw new Error('This source is not currently live. Use Auto-detect or Video / replay.');
+      if (meta.live_status === 'is_upcoming') throw new Error('This livestream has not started yet. Use Live replay to wait, or try again once it is live.');
+      if (meta.live_status === 'post_live') throw new Error('The broadcast ended. Use Live replay to wait for the recording.');
+      if (!isLive && options.mode === 'live') throw new Error('This source is not currently live. Use Auto-detect, Recorded video or Live replay.');
       if (isLive && options.mode === 'recorded') throw new Error('This source is still live. Switch to Auto-detect or Live monitor.');
       if (!isLive && Number(meta.duration) > maxSourceSeconds) throw new Error(`This source exceeds the ${Math.round(maxSourceSeconds / 60)}-minute workspace limit.`);
-      const common = { title: String(meta.title).trim().slice(0, 180), creator: String(meta.channel || meta.uploader || '').slice(0, 90), sourceKind: isLive ? 'live' : meta.was_live || meta.live_status === 'was_live' ? 'replay' : 'video' };
+      const isReplay = Boolean(job.replayWait || meta.was_live || meta.live_status === 'was_live');
+      const common = { title: String(meta.title).trim().slice(0, 180), creator: String(meta.channel || meta.uploader || '').slice(0, 90), sourceKind: isLive ? 'live' : isReplay ? 'replay' : 'video', replayWait: null };
       if (isLive) {
         update({ ...common, status: 'capturing', progress: 9, capturedSeconds: 0, captureLimitSeconds: Math.min(options.liveMinutes * 60, maxSourceSeconds), detail: `Recording up to ${Math.min(options.liveMinutes, maxSourceSeconds / 60)} min from the live edge.` });
         const capture = await captureLive(meta, options, scratch, session, progress, update);
