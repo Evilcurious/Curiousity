@@ -1,8 +1,8 @@
 /* Account access */
 .startup-screen { display: grid; place-content: center; justify-items: center; gap: 12px; min-height: 100dvh; color: var(--muted); font-size: 13px; }
 .startup-screen svg { color: var(--accent-text); }
-.access-shell { max-width: 1770px; margin: auto; min-height: 100dvh; display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); padding: clamp(12px, 1.7vw, 26px); gap: clamp(12px, 1.5vw, 24px); }
-.access-left { display: grid; grid-template-rows: auto 1fr auto; padding: 15px clamp(16px, 2.1vw, 36px); min-width: 0; }
+.access-shell { max-width: 1770px; margin: auto; min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); padding: clamp(12px, 1.7vw, 26px); gap: clamp(12px, 1.5vw, 24px); }
+.access-account { display: grid; grid-template-rows: auto 1fr auto; padding: 15px clamp(16px, 2.1vw, 36px); min-width: 0; }
 .access-kicker, .access-footer { display: flex; align-items: center; gap: 9px; color: var(--muted); }
 .access-kicker { font: 500 10px/1.5 var(--mono); letter-spacing: .15em; }
 .access-kicker svg, .access-footer svg { color: var(--accent-text); }
@@ -125,10 +125,10 @@
 }
 @media (max-width: 640px) {
   .access-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; min-height: 100dvh; gap: 4px; }
-  .access-art { grid-row: 1; min-height: 176px; border-radius: 12px; grid-template-rows: 1fr; }
+  .access-art { min-height: 176px; border-radius: 12px; grid-template-rows: 1fr; }
   .access-art-image { background-position: 50% 46%; }
   .access-art-meta, .access-kicker { display: none; }
-  .access-left { grid-template-rows: 1fr auto; padding: 8px 12px; }
+  .access-account { grid-template-rows: 1fr auto; padding: 8px 12px; }
   .access-form-wrap { align-self: start; padding: 18px 0 25px; }
   .access-wordmark .brand-mark { width: 38px; height: 38px; margin-bottom: 7px; }
   .access-wordmark strong { font-size: 43px; }

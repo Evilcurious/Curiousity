@@ -296,6 +296,35 @@ test('public password requests require a trusted HTTPS connection, including aft
   assert.match(updated.cookie, /HttpOnly; Secure; SameSite=Lax/);
   assert.equal((await signin(deployment, tls)).status, 401);
   assert.equal((await signin(deployment, tls, { ...exampleAdmin, password: replacement })).status, 200);
+
+  // A VPS service that starts `node server/main.mjs` directly should pick up
+  // the same project configuration as npm start, before the store is loaded.
+  const cwd = await temp(t);
+  await writeFile(join(cwd, '.env'), `TRUST_PROXY=loopback\nPUBLIC_ORIGIN=${PUBLIC_ORIGIN}\nDATA_DIR=./vps-data\n`);
+  const linux = await startEngine(t, { cwd, env: { ...adminEnv, TRUST_PROXY: undefined, PUBLIC_ORIGIN: undefined, DATA_DIR: undefined } });
+  const vps = { Host: '127.0.0.1:5173', 'X-Forwarded-For': '198.51.100.8', 'X-Forwarded-Host': 'alias.example.test', 'X-Forwarded-Proto': 'HTTPS' };
+  const session = (await send(linux, '/auth/session', vps)).data;
+  assert.equal(session.httpsOrigin, PUBLIC_ORIGIN);
+  assert.equal(session.passwordTransport, 'https');
+  assert.equal(JSON.parse(await readFile(join(cwd, 'vps-data', 'workspace.json'), 'utf8')).users.length, 1);
+
+  // A loopback proxy may rewrite Host, but the TLS request's forwarded
+  // public hostname still matches its browser origin.
+  const viaProxy = await signin(linux, { ...vps, Origin: 'https://alias.example.test' });
+  assert.equal(viaProxy.status, 200);
+  assert.match(viaProxy.cookie, /; Secure;/);
+  for (const invalid of ['', 'http', 'https, http']) {
+    const headers = { ...vps, Origin: PUBLIC_ORIGIN, 'X-Forwarded-Proto': invalid };
+    const failure = await signin(linux, headers);
+    assert.equal(failure.status, 403);
+    assert.equal(failure.cookie, undefined);
+    assert.match(failure.data.error, /overwrite X-Forwarded-Proto/);
+  }
+  const mismatch = await signin(linux, { ...tls, Origin: http.Origin });
+  assert.equal(mismatch.status, 403, 'HTTP browser origins cannot use a reported TLS connection');
+  const falseLoopback = await signin(linux, { ...host, 'X-Forwarded-Host': 'localhost' });
+  assert.equal(falseLoopback.status, 403, 'forwarded host cannot masquerade as local HTTP');
+  assert.equal((await linux.agent().signin()).status, 200);
 });
 
 test('generated administrator passwords are not created or printed to redirected output', async (t) => {

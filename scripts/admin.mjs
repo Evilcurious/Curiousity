@@ -1,3 +1,4 @@
+import '../server/environment.mjs';
 import { stdin, stdout, stderr } from 'node:process';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';

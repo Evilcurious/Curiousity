@@ -6,8 +6,8 @@ export const exampleAdmin = { email: 'admin@example.test', password: 'synthetic-
 export const memberPassword = 'synthetic-member-only-P9';
 export const writeHeaders = { 'X-Clipforge': 'workspace' };
 
-export async function startEngine(t, { env, flags = [], imports = [] } = {}) {
-  const child = spawn(process.execPath, [...imports.flatMap((path) => ['--import', resolve(path)]), 'server/main.mjs', ...flags], { env: {
+export async function startEngine(t, { cwd, env, flags = [], imports = [] } = {}) {
+  const child = spawn(process.execPath, [...imports.flatMap((path) => ['--import', resolve(path)]), resolve('server/main.mjs'), ...flags], { cwd, env: {
     ...process.env, HOST: '127.0.0.1', PORT: '0', ADMIN_EMAIL: '', ADMIN_PASSWORD: '', PUBLIC_ORIGIN: '', TRUST_PROXY: '', ALLOW_SIGNUP: 'true',
     GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '', GOOGLE_REDIRECT_URI: '', TIKTOK_CLIENT_KEY: '', TIKTOK_CLIENT_SECRET: '', TIKTOK_REDIRECT_URI: '', ...env,
   } });

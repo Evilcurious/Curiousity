@@ -48,14 +48,15 @@ Use a persistent Node service with FFmpeg and a writable data directory. Curious
 
 ### Node with an HTTPS reverse proxy
 
-On a fresh install, copy `.env.example` to `.env`. Set `ADMIN_EMAIL` and consider `ALLOW_SIGNUP=false` for a private instance. Set these values when **one trusted HTTPS reverse proxy** is in front of the private Node listener:
+On a fresh install, copy `.env.example` to `.env`. Set `ADMIN_EMAIL` and consider `ALLOW_SIGNUP=false` for a private instance. When Nginx or Caddy runs on the same Linux host and connects to Curiousity on loopback, set:
 
 ```dotenv
+HOST=127.0.0.1
 PUBLIC_ORIGIN=https://clips.example.com
-TRUST_PROXY=1
+TRUST_PROXY=loopback
 ```
 
-Replace `clips.example.com` with your hostname. Install and build with `npm ci`, `npm run setup`, and `npm run build`. Provision the admin as shown above before starting `npm start`. Use a process manager such as systemd to keep the app running.
+Replace `clips.example.com` with your hostname. Install and build with `npm ci`, `npm run setup`, and `npm run build`. Provision the admin as shown above before starting `npm start`. With systemd or PM2, set the service working directory to the checkout (where `.env` and the default `.clipforge/` live). Both `npm start` and direct `node server/main.mjs` launches read `.env` from that directory. Settings already exported by the service take precedence.
 
 Point DNS at the VPS and allow inbound ports 80 and 443. For Caddy, this site config serves HTTPS and redirects HTTP automatically:
 
@@ -65,18 +66,23 @@ clips.example.com {
 }
 ```
 
-If you use Nginx, configure TLS and redirect port 80 to HTTPS. In the HTTPS virtual host, proxy to the private listener and have Nginx overwrite the forwarded headers:
+For Nginx, configure TLS and redirect port 80 to HTTPS. Copy [`deploy/nginx-curiousity.conf`](deploy/nginx-curiousity.conf) to `/etc/nginx/snippets/curiousity-proxy.conf` and use it inside the existing **HTTPS** virtual host, replacing its Curiousity proxy directives rather than duplicating them:
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:5173;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-For $remote_addr;
+    include /etc/nginx/snippets/curiousity-proxy.conf;
 }
 ```
 
-If the browser already shows `https://` but Curiousity reports that password requests require HTTPS, check that the app reads `TRUST_PROXY=1` and that the proxy sets `X-Forwarded-Proto: https` for actual HTTPS requests. Restart the app after changing its environment. Do not enable proxy trust on a public backend port.
+Run `sudo nginx -t && sudo systemctl reload nginx` after editing. The snippet preserves the hostname and **overwrites** `X-Forwarded-Proto` with `$scheme`. Restart Curiousity after changing `.env` or its service environment.
+
+If sign-in still reports an HTTPS error, check the public route without submitting a password:
+
+```sh
+curl -fsS https://clips.example.com/api/auth/session
+```
+
+The response should contain `"passwordTransport":"https"`. A `blocked` or `local` result at the public URL means the app is not seeing a trusted TLS connection. Verify the proxy forwards a single `X-Forwarded-Proto: https` on actual TLS requests, connects to `127.0.0.1` for `TRUST_PROXY=loopback`, and that the app picked up the setting. If a CDN sits in front of Nginx, use TLS from the CDN to the VPS as well; don't hard-code the forwarded scheme. If one trusted proxy connects over a private non-loopback network (for example the Compose HTTPS overlay), use `TRUST_PROXY=1` instead. Never enable proxy trust on a public backend port.
 
 ### Docker Compose with automatic HTTPS
 

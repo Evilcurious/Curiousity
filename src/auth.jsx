@@ -35,7 +35,13 @@ export default function Access({ session, onSignedIn, startupError, notice, retr
     finally { setBusy(false); }
   }
   return <main className="access-shell">
-    <section className="access-left" aria-labelledby="access-title">
+    <aside className="access-art" aria-label="Curiousity">
+      <div className="access-art-image" aria-hidden="true"/>
+      <div className="access-art-meta"><span><Clapperboard size={14}/> VIDEO WORKSPACE</span><span>01 / STUDIO</span></div>
+      <div className="access-wordmark"><Logo branding={session?.branding}/><strong>Curiousity<span>.</span></strong><p>Find the clip worth sharing.</p></div>
+      <div className="access-art-meta access-art-bottom"><span><Sparkles size={14}/> FIND · CUT · SHARE</span><span>MP4 / SRT</span></div>
+    </aside>
+    <section className="access-account" aria-labelledby="access-title">
       <header className="access-kicker"><ScanLine size={17}/> CREATOR WORKSPACE</header>
       <div className="access-form-wrap">
         <div className="access-step"><span/><span>ACCOUNT ACCESS</span></div>
@@ -67,11 +73,5 @@ export default function Access({ session, onSignedIn, startupError, notice, retr
       </div>
       <footer className="access-footer"><LockKeyhole size={15}/> Your keys and connections stay in your account.</footer>
     </section>
-    <aside className="access-art" aria-label="Curiousity">
-      <div className="access-art-image" aria-hidden="true"/>
-      <div className="access-art-meta"><span><Clapperboard size={14}/> VIDEO WORKSPACE</span><span>01 / STUDIO</span></div>
-      <div className="access-wordmark"><Logo branding={session?.branding}/><strong>Curiousity<span>.</span></strong><p>Find the clip worth sharing.</p></div>
-      <div className="access-art-meta access-art-bottom"><span><Sparkles size={14}/> FIND · CUT · SHARE</span><span>MP4 / SRT</span></div>
-    </aside>
   </main>;
 }

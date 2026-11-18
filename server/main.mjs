@@ -1,4 +1,6 @@
+import './environment.mjs';
 import express from 'express';
+import ipaddr from 'ipaddr.js';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -21,7 +23,9 @@ import { ROOT, toolsStatus } from './tools.mjs';
 const dev = process.argv.includes('--dev');
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 5173);
-const loopback = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+const loopbackHost = /^(?:127\.0\.0\.1|\[::1\]|localhost)(?::\d{1,5})?$/i;
+const isLoopback = (address) => ipaddr.isValid(address || '') && ipaddr.process(address).range() === 'loopback';
+const proxyMode = process.env.TRUST_PROXY?.trim().toLowerCase() || '0';
 let publicOrigin = '';
 if (process.env.PUBLIC_ORIGIN) {
   const url = externalUrl(process.env.PUBLIC_ORIGIN);
@@ -31,14 +35,28 @@ if (process.env.PUBLIC_ORIGIN) {
 
 const app = express();
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
-else if (publicOrigin) console.warn('PUBLIC_ORIGIN is set. For HTTPS behind a reverse proxy, set TRUST_PROXY=1 only when the backend is private and one trusted proxy sets X-Forwarded-Proto.');
+if (proxyMode === 'loopback') app.set('trust proxy', (address, hop) => hop === 0 && isLoopback(address));
+else if (proxyMode === '1') app.set('trust proxy', 1);
+else if (proxyMode !== '0') throw new Error('TRUST_PROXY must be 0, loopback, or 1.');
+if (publicOrigin && proxyMode === '0') console.warn('PUBLIC_ORIGIN is set but proxy trust is off. For a host-local HTTPS reverse proxy, set TRUST_PROXY=loopback.');
 const server = createServer(app);
 const webRoot = join(ROOT, 'dist');
 const store = createStore();
 await initializeAdmin(store);
 const preview = (req) => dev && [req.get('host'), req.get('x-forwarded-host')?.split(',')[0]?.trim()].some((value) => /^[a-z0-9-]+\.e2b\.app$/i.test(value || ''));
-const secure = (req) => req.secure || (preview(req) && (req.get('x-forwarded-proto') === 'https' || req.get('origin')?.startsWith('https://')));
+const proxyTrusted = (req) => app.get('trust proxy fn')(req.socket.remoteAddress, 0);
+const secure = (req) => req.socket.encrypted === true || (proxyTrusted(req) && req.get('x-forwarded-proto')?.trim().toLowerCase() === 'https') ||
+  (preview(req) && (req.get('x-forwarded-proto') === 'https' || req.get('origin')?.startsWith('https://')));
+function passwordTransport(req) {
+  const origin = req.get('origin');
+  if (secure(req)) return !origin || origin.startsWith('https://') ? 'https' : 'blocked';
+  const host = req.get('host');
+  const local = loopbackHost.test(host || '') && loopbackHost.test(req.host || '') &&
+    (!origin || origin.toLowerCase() === `http://${host.toLowerCase()}`) &&
+    (proxyMode !== 'loopback' || proxyTrusted(req)) &&
+    (!proxyTrusted(req) || !req.get('x-forwarded-for') || isLoopback(req.ip));
+  return local ? 'local' : 'blocked';
+}
 const auth = createAuth(store, { secure, embedded: preview });
 const networkLimit = limiter(60_000);
 const dailySharedLimit = Math.floor(boundedEnv('PREMIUM_DAILY_JOBS', 10, 1, 200));
@@ -154,8 +172,10 @@ app.use('/api', (req, res, next) => {
     if (origin) {
       try {
         const actual = new URL(origin).host;
-        const forwarded = req.get('x-forwarded-host')?.split(',')[0]?.trim();
-        sameHost = (publicOrigin && new URL(publicOrigin).origin === origin) || actual === req.get('host') || (preview(req) && actual.endsWith('.e2b.app') && actual === forwarded);
+        const forwarded = req.get('x-forwarded-host')?.trim();
+        sameHost = publicOrigin === origin || actual === req.get('host') ||
+          (proxyTrusted(req) && secure(req) && actual === forwarded) ||
+          (preview(req) && actual.endsWith('.e2b.app') && actual === forwarded?.split(',')[0]?.trim());
       } catch { /* Reject malformed origins. */ }
     }
     if (req.get('x-clipforge') !== 'workspace' || !sameHost || ['cross-site', 'same-site'].includes(req.get('sec-fetch-site'))) return next(new HttpError(403, 'Requests must come from this workspace.'));
@@ -166,11 +186,13 @@ app.use('/api', express.json({ limit: '192kb' }));
 
 const authResponse = (account) => ({ user: publicAccount(account), branding: publicBrand(store), allowSignup: auth.allowSignup });
 function allowPassword(req) {
-  if (!secure(req) && !loopback.has(req.hostname)) {
-    throw new HttpError(403, 'Password requests require HTTPS. If you already opened the HTTPS site, check that the trusted reverse proxy forwards X-Forwarded-Proto and Curiousity has TRUST_PROXY=1.');
-  }
+  if (passwordTransport(req) !== 'blocked') return;
+  let hint = 'If your HTTPS proxy runs on this VPS, start Curiousity with TRUST_PROXY=loopback.';
+  if (proxyTrusted(req)) hint = 'The reverse proxy must overwrite X-Forwarded-Proto with the actual connection scheme.';
+  else if (proxyMode === 'loopback') hint = 'With TRUST_PROXY=loopback, the proxy must connect to Curiousity at 127.0.0.1 or ::1.';
+  throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
-app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null }));
+app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req) }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
 app.post('/api/auth/signout', (req, res) => { auth.logout(req, res); res.status(204).end(); });
@@ -496,7 +518,7 @@ const sites = ['google', 'tiktok'];
 for (const site of sites) {
   app.put(`/api/${site}/config`, (req, res) => res.json(connections(req.account)[site].configure(req.body || {})));
   app.post(`/api/${site}/connect`, (req, res) => {
-    const origin = req.get('origin') || publicOrigin || `${req.protocol}://${req.get('host')}`;
+    const origin = req.get('origin') || publicOrigin || `${secure(req) ? 'https' : 'http'}://${req.get('host')}`;
     const service = connections(req.account)[site];
     const result = site === 'google' ? service.connect(req.body?.targets, origin) : { url: service.connect(origin), secure: true };
     res.cookie(`cf_${site}_state`, result.state || new URL(result.url).searchParams.get('state'), { secure: result.secure, httpOnly: true, sameSite: 'lax', maxAge: 600_000, path: `/api/${site}/callback` });
