@@ -1,0 +1,28 @@
+{
+  "name": "clipforge-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env server/main.mjs --dev",
+    "build": "node scripts/build.mjs",
+    "start": "node --env-file-if-exists=.env server/main.mjs",
+    "setup": "node --env-file-if-exists=.env scripts/setup.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "express": "^5.3.0",
+    "lucide-react": "^1.74.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

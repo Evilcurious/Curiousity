@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+.clipforge/
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+
+/out/

@@ -1,0 +1,43 @@
+export class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+export const maxClips = 20;
+export const liveLimits = [2, 5, 10, 15, 30];
+const videoId = /^[a-zA-Z0-9_-]{11}$/;
+export function youtubeSource(raw) {
+  let input;
+  try { input = new URL(typeof raw === 'string' ? raw.trim() : ''); } catch { /* Report the common message below. */ }
+  let id;
+  if (input && ['http:', 'https:'].includes(input.protocol) && !input.username && !input.password && !input.port) {
+    const parts = input.pathname.split('/').filter(Boolean);
+    const host = input.hostname.toLowerCase();
+    if (host === 'youtu.be' && parts.length === 1) id = parts[0];
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
+      if (parts.length === 1 && parts[0] === 'watch') id = input.searchParams.get('v');
+      if (parts.length === 2 && ['shorts', 'live', 'embed', 'v'].includes(parts[0])) id = parts[1];
+      if (parts.length === 2 && parts[1] === 'live') {
+        let handle;
+        try { handle = decodeURIComponent(parts[0]); } catch { /* Malformed URL. */ }
+        if (handle && /^@[\p{L}\p{N}._-]{3,40}$/u.test(handle)) return { id: null, url: `https://www.youtube.com/@${encodeURIComponent(handle.slice(1))}/live` };
+      }
+      if (parts.length === 3 && parts[0] === 'channel' && /^UC[\w-]{22}$/.test(parts[1]) && parts[2] === 'live') return { id: null, url: `https://www.youtube.com/channel/${parts[1]}/live` };
+    }
+  }
+  if (!id || !videoId.test(id)) throw new HttpError(400, 'Enter a link to a single YouTube video or livestream.');
+  return { id, url: `https://www.youtube.com/watch?v=${id}` };
+}
+
+export function jobOptions(body = {}) {
+  const demo = body.demo === true;
+  const source = demo ? null : youtubeSource(body.url);
+  const count = Number(body.count);
+  if (!Number.isInteger(count) || count < 1 || count > maxClips) throw new HttpError(400, `Choose between 1 and ${maxClips} clips.`);
+  const mode = ['auto', 'recorded', 'live'].includes(body.mode) ? body.mode : 'auto';
+  const liveMinutes = liveLimits.includes(Number(body.liveMinutes)) ? Number(body.liveMinutes) : 2;
+  return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true };
+}
+
+export function text(value, max, fallback = '') {
+  return typeof value === 'string' ? value.trim().slice(0, max) : fallback;
+}
