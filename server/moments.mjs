@@ -1,3 +1,5 @@
+export { makeAss, makeSrt } from './captions.mjs';
+
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const mean = (items) => items.reduce((sum, n) => sum + n, 0) / (items.length || 1);
 const overlap = (a, b) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
@@ -35,13 +37,14 @@ export function parseVtt(input) {
 
 export function buildCandidates({ duration, count, cues = [], audio = [], heatmap = [] }) {
   if (!Number.isFinite(duration) || duration < 6) return [];
-  const length = Math.min(duration, clamp((duration / count) * 0.88, 8, 42));
+  const automatic = count === 'auto';
+  const length = Math.min(duration, automatic ? clamp(duration * .32, 12, 30) : clamp((duration / count) * .88, 8, 42));
   const step = Math.max(3, length * 0.38, duration / 550);
   const starts = [];
   for (let start = 0; start <= duration - length; start += step) starts.push(start);
   if (duration - length - (starts.at(-1) ?? 0) > 0.75) starts.push(duration - length);
   // Include evenly spaced starts for short sources that cannot fill all requested slots at full length.
-  const desired = Math.min(count, Math.floor(duration / 8) || 1);
+  const desired = automatic ? 0 : Math.min(count, Math.floor(duration / 8) || 1);
   if (desired > 1) for (let i = 0; i < desired; i++) starts.push(i * (duration - length) / (desired - 1));
   const peaks = heatmap.filter((h) => Number.isFinite(h.start_time) && Number.isFinite(h.end_time) && Number.isFinite(h.value))
     .map((h) => ({ start: h.start_time, end: h.end_time, value: clamp(h.value, 0, 1) }));
@@ -63,7 +66,7 @@ export function buildCandidates({ duration, count, cues = [], audio = [], heatma
     const active = samples.filter((level) => level > -44);
     const energy = samples.length ? clamp((mean(active) - reference + 3) / 16, 0, 1) * (active.length / samples.length) : 0;
     const replay = peaks.length ? clamp(peaks.reduce((sum, p) => sum + overlap(window, p) * p.value, 0) / (end - start), 0, 1) : 0;
-    const hook = /\b(here(?:'s| is) (?:why|how|what)|the reason|what if|the secret|never|actually|imagine|turns out|wait|but|mistake|surpris\w*|instead)\b|[?!]/i.test(excerpt.slice(0, 210));
+    const hook = /\b(here(?:'s| is) (?:why|how|what)|the reason|what if|the secret|never|actually|imagine|turns out|wait|but|mistake|surpris\w*|instead)\b|[?!؟！？]/i.test(excerpt.slice(0, 210));
     const pace = clamp(excerpt.split(/\s+/).filter(Boolean).length / ((end - start) * 2.3), 0, 1);
     const score = Math.round(45 + (peaks.length ? 25 * replay + 11 * energy : 20 * energy) + 14 * pace + (hook ? 8 : 0));
     const reason = replay > 0.45 ? 'This section shows stronger replay interest in YouTube’s heatmap.' : hook ? 'The transcript suggests a hook that could work on its own.' : energy > 0.34 ? 'Audio activity is higher than the surrounding recording.' : excerpt ? 'This section has enough dialogue to stand as a clip.' : 'A time-based candidate. No transcript or strong engagement signal was available here.';
@@ -75,13 +78,21 @@ export function buildCandidates({ duration, count, cues = [], audio = [], heatma
   }).sort((a, b) => b.score - a.score || a.start - b.start);
 }
 
-export function pickMoments(ranked, count) {
+export function pickMoments(ranked, count, overlapFraction = .14) {
   const picked = [];
   for (const item of ranked) {
     if (picked.length >= count) break;
-    if (picked.every((other) => overlap(item, other) <= 0.14 * Math.min(item.end - item.start, other.end - other.start))) picked.push(item);
+    if (picked.every((other) => overlap(item, other) <= overlapFraction * Math.min(item.end - item.start, other.end - other.start))) picked.push(item);
   }
   return picked;
+}
+
+export function pickAutoMoments(candidates, limit) {
+  const ranked = candidates.slice().sort((a, b) => b.score - a.score || a.start - b.start);
+  // Dense but otherwise flat dialogue scores roughly 63 with typical audio.
+  // Keep only candidates with another signal, rather than filling a quota.
+  const standout = ranked.filter((moment) => moment.score >= 64);
+  return { picks: standout.length ? pickMoments(standout, limit, 0) : ranked.slice(0, Math.min(1, limit)), fallback: !standout.length && ranked.length > 0 };
 }
 
 export function clipCues(allCues, start, end) {
@@ -109,26 +120,4 @@ export function clipCues(allCues, start, end) {
 }
 
 const pad = (n) => String(n).padStart(2, '0');
-function timestamp(total, ass = false) {
-  const precision = ass ? 100 : 1000, ticks = Math.max(0, Math.round(total * precision));
-  const h = Math.floor(ticks / (precision * 3600)), m = Math.floor(ticks / (precision * 60)) % 60, s = Math.floor(ticks / precision) % 60;
-  return `${ass ? h : pad(h)}:${pad(m)}:${pad(s)}${ass ? '.' : ','}${String(ticks % precision).padStart(ass ? 2 : 3, '0')}`;
-}
 export const timeLabel = (seconds) => `${pad(Math.floor(seconds / 60))}:${pad(Math.floor(seconds) % 60)}`;
-export const makeSrt = (rows) => rows.map((cue, index) => `${index + 1}\n${timestamp(cue.start)} --> ${timestamp(cue.end)}\n${cue.text}\n`).join('\n');
-const captionFont = new Map([['ar', 'Noto Sans Arabic'], ['ur', 'Noto Sans Arabic'], ['hi', 'Noto Sans Devanagari'], ['bn', 'Noto Sans Bengali']]);
-export const makeAss = (rows, { width = 720, height = 1280 } = {}, language) => `[Script Info]
-ScriptType: v4.00+
-PlayResX: ${width}
-PlayResY: ${height}
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,${captionFont.get(language) || 'DejaVu Sans'},${Math.max(22, Math.round(Math.min(width, height) * .057))},&H00F7FFF5,&H0060FABF,&H000B100A,&H76000000,-1,0,0,0,100,100,0,0,1,3.5,1,2,${Math.round(width * .08)},${Math.round(width * .08)},${Math.round(height * (height > width ? .175 : .105))},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${rows.map((cue) => `Dialogue: 0,${timestamp(cue.start, true)},${timestamp(cue.end, true)},Default,,0,0,0,,${cue.text.replaceAll('\\', '＼').replaceAll('{', '(').replaceAll('}', ')')}`).join('\n')}
-`;

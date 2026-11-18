@@ -1,4 +1,5 @@
-import { frameFor, languages, platforms } from '../shared/exports.mjs';
+import { frameFor, languages, platforms, romanUrdu } from '../shared/exports.mjs';
+import { captionStyleOptions, resolveCaptionStyle } from '../shared/captions.mjs';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -33,20 +34,29 @@ export function youtubeSource(raw) {
 export function jobOptions(body = {}) {
   const demo = body.demo === true;
   const source = demo ? null : youtubeSource(body.url);
-  const count = Number(body.count);
-  if (!Number.isInteger(count) || count < 1 || count > maxClips) throw new HttpError(400, `Choose between 1 and ${maxClips} clips.`);
+  const count = body.count === 'auto' ? 'auto' : ['string', 'number'].includes(typeof body.count) ? Number(body.count) : NaN;
+  if (count !== 'auto' && (!Number.isInteger(count) || count < 1 || count > maxClips)) throw new HttpError(400, `Choose Auto or enter a clip count from 1 to ${maxClips}.`);
   const mode = ['auto', 'recorded', 'live'].includes(body.mode) ? body.mode : 'auto';
   const liveMinutes = liveLimits.includes(Number(body.liveMinutes)) ? Number(body.liveMinutes) : 2;
   const platform = body.platform ?? 'universal';
   if (typeof platform !== 'string' || !Object.hasOwn(platforms, platform)) throw new HttpError(400, 'Choose a supported export platform.');
   const frame = frameFor(body.aspectRatio ?? platforms[platform].ratio);
   if (!frame) throw new HttpError(400, 'Enter a ratio like 3:2. Use whole numbers from 1 to 100 and stay between 1:4 and 4:1.');
-  const captionLanguage = body.captionLanguage ?? 'source';
-  const hashtagLanguage = body.hashtagLanguage ?? 'source';
+  const romanCode = (value) => typeof value === 'string' && value.toLowerCase() === 'ur-latn' ? romanUrdu : value;
+  const captionLanguage = romanCode(body.captionLanguage ?? 'source');
+  const hashtagLanguage = romanCode(body.hashtagLanguage ?? 'source');
   if (captionLanguage !== 'source' && (typeof captionLanguage !== 'string' || !Object.hasOwn(languages, captionLanguage))) throw new HttpError(400, 'Choose a supported caption language.');
   if (!['source', 'off'].includes(hashtagLanguage) && (typeof hashtagLanguage !== 'string' || !Object.hasOwn(languages, hashtagLanguage))) throw new HttpError(400, 'Choose a supported hashtag language.');
+  const style = body.captionStyle;
+  if (style !== undefined && (!style || typeof style !== 'object' || Array.isArray(style) || Object.entries(style).some(([key, value]) => !Object.hasOwn(captionStyleOptions, key) || typeof value !== 'string' || !Object.hasOwn(captionStyleOptions[key], value)))) {
+    throw new HttpError(400, 'Choose a supported caption font, effect, size and animation.');
+  }
+  const aiProfile = demo ? 'local' : body.aiProfile ?? 'workspace';
+  if (typeof aiProfile !== 'string' || (!['workspace', 'local'].includes(aiProfile) && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(aiProfile))) {
+    throw new HttpError(400, 'Select a saved AI profile, Workspace default, or Local analysis.');
+  }
   return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true,
-    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage };
+    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage, captionStyle: resolveCaptionStyle(style), aiProfile };
 }
 
 export function text(value, max, fallback = '') {

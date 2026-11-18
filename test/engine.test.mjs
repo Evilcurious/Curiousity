@@ -1,11 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ffmpeg, run } from '../server/tools.mjs';
+import { defaultCaptionStyle } from '../shared/captions.mjs';
 
 const password = 'integration-test-only';
 const headers = { Authorization: `Basic ${Buffer.from(`clipforge:${password}`).toString('base64')}`, 'X-Clipforge': 'workspace' };
@@ -49,6 +52,40 @@ async function waitForCapture(request, id) {
   }
   throw new Error('Live capture did not report media progress.');
 }
+
+test('API saves repeated provider profiles, keeps distinct keys, and separates ranking from transcription', { timeout: 25_000 }, async (t) => {
+  const data = await mkdtemp(join(tmpdir(), 'cf-profile-api-'));
+  t.after(() => rm(data, { recursive: true, force: true }));
+  const app = await boot({ DATA_DIR: data }, t);
+  const profiles = [];
+  for (let i = 0; i < 22; i++) {
+    const type = i % 2 ? 'custom' : 'deepseek';
+    const body = { name: 'Same display name', type, baseUrl: type === 'custom' ? 'https://chat.example/v1/' : 'https://ignored.example/v1', apiKey: `ephemeral-test-key-${i}`, model: `chat-model-${i}` };
+    const response = await app.post('/providers', body);
+    assert.equal(response.status, 201);
+    const profile = await response.json();
+    assert.equal(profile.hasKey, true);
+    assert.equal(profile.apiKey, undefined);
+    assert.equal(profile.baseUrl, type === 'custom' ? 'https://chat.example/v1' : 'https://api.deepseek.com/v1');
+    profiles.push(profile);
+  }
+  assert.equal(new Set(profiles.map(({ id }) => id)).size, 22);
+  const settings = (path, body) => app.request(`/settings/${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await settings('ranking', { providerId: profiles[0].id })).status, 200);
+  assert.equal((await settings('captions', { providerId: profiles[1].id, model: 'timestamped-audio' })).status, 200);
+  const workspace = await (await app.request('/workspace')).json();
+  assert.equal(workspace.providers.length, 22);
+  assert.equal(workspace.activeProviderId, profiles[0].id);
+  assert.deepEqual(workspace.captions, { providerId: profiles[1].id, model: 'timestamped-audio' });
+  const disk = await readFile(join(data, 'workspace.json'), 'utf8');
+  assert.doesNotMatch(disk, /ephemeral-test-key-/);
+  assert.equal(new Set(JSON.parse(disk).providers.map(({ apiKey }) => apiKey)).size, 22);
+  assert.equal((await app.request(`/providers/${profiles[0].id}`, { method: 'DELETE' })).status, 204);
+  const changed = await (await app.request('/workspace')).json();
+  assert.equal(changed.activeProviderId, null);
+  assert.equal(changed.captions.providerId, profiles[1].id);
+  assert.equal(changed.providers.length, 21);
+});
 
 test('engine validates and authenticates writes, renders MP4/SRT, and handles replay and live-capture fixtures', { timeout: 120_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cf-engine-'));
@@ -108,16 +145,79 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
   assert.equal(poster.status, 200);
   assert.equal(poster.headers.get('content-type'), 'image/jpeg');
   await poster.arrayBuffer();
+  const style = { font: 'serif', effect: 'glow', size: 'large', animation: 'pop', exitAnimation: 'fade' };
+  const styledDemo = await app.post('/projects', { demo: true, count: 'auto', captionLanguage: 'ur-Latn', captionStyle: style, hashtagLanguage: 'es' });
+  assert.equal(styledDemo.status, 202);
+  const themed = await done(app.request, (await styledDemo.json()).id);
+  assert.equal(themed.status, 'ready', themed.error);
+  assert.deepEqual(themed.autoSelection, { count: 2, fallback: false });
+  assert.deepEqual(themed.options.captionStyle, style);
+  assert.equal(themed.options.aiProfile, 'local');
+  assert.equal(themed.captionsSource, 'Bundled translation');
+  for (const shot of themed.clips) {
+    assert.equal(shot.captionLanguage, 'ur-Latn');
+    assert.ok(shot.hashtags.includes('#MejoresMomentos'));
+    assert.equal(shot.burnedCaptions, workspace.tools.subtitles);
+    const srt = await (await fetch(`${app.url}${shot.captionsUrl}`, { headers })).text();
+    assert.match(srt, /[A-Za-z]{3,} [A-Za-z]{3,}/);
+    assert.doesNotMatch(srt, /\p{Script=Arabic}|\{\\/u);
+  }
+  if (workspace.tools.subtitles) {
+    const shot = themed.clips[0];
+    const input = join(root, '.hidden-workspace', 'projects', themed.id, shot.id, 'video.mp4');
+    let rgb = Buffer.alloc(0);
+    await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-ss', '0.45', '-i', input, '-an', '-frames:v', '1', '-threads', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], {
+      onData: (chunk) => { rgb = Buffer.concat([rgb, chunk]); },
+    });
+    assert.equal(rgb.length, 720 * 1280 * 3);
+    let lime = 0;
+    for (let i = 3 * 720 * 880; i < 3 * 720 * 1070; i += 3) {
+      if (rgb[i] > 185 && rgb[i + 1] > 228 && rgb[i + 1] > rgb[i + 2] + 70) lime++;
+    }
+    assert.ok(lime > 40, 'exported MP4 pixels contain the selected lime caption color');
+  }
+  const off = await app.post('/projects', { demo: true, count: 1, captions: false, captionLanguage: 'ur-Latn', captionStyle: style, aspectRatio: '4:1' });
+  const clean = await done(app.request, (await off.json()).id);
+  assert.equal(clean.status, 'ready', clean.error);
+  assert.equal(clean.clips.length, 1);
+  assert.equal(clean.clips[0].captionsUrl, null);
+  assert.equal(clean.clips[0].burnedCaptions, false);
+  assert.equal(clean.autoSelection, undefined);
   const data = join(root, 'replay');
   const replay = await boot({ DATA_DIR: data, YTDLP_BIN: join(import.meta.dirname, 'fixtures', 'ytdlp.mjs'),
     FIXTURE_INPUT: join(root, '.hidden-workspace', 'projects', job.id, clip.id, 'video.mp4'),
     FFMPEG_BIN: join(import.meta.dirname, 'fixtures', 'ffmpeg.mjs'), FIXTURE_FFMPEG: ffmpeg, PYTHON_BIN: '/bin/false', MAX_SOURCE_MINUTES: '1', FIXTURE_LIVE_LIMIT_SECONDS: '60', MAX_SOURCE_MB: '10',
   }, t);
-  const video = await replay.post('/projects', { url: 'https://youtu.be/dQw4w9WgXcQ', count: 1, mode: 'auto', platform: 'youtube-landscape', captionLanguage: 'es', hashtagLanguage: 'off' });
+  const calls = [];
+  const mock = createServer(async (req, res) => {
+    let data = '';
+    for await (const chunk of req) data += chunk;
+    const payload = JSON.parse(data);
+    calls.push({ route: req.url, key: req.headers.authorization, model: payload.model });
+    const rows = JSON.parse(payload.messages[1].content).map(({ id }) => ({ id, score: 85 }));
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(rows) } }] }));
+  });
+  mock.listen(0, '127.0.0.1');
+  await once(mock, 'listening');
+  t.after(() => new Promise((resolve) => mock.close(resolve)));
+  const makeProfile = (name, folder) => replay.post('/providers', { type: 'custom', name, baseUrl: `http://127.0.0.1:${mock.address().port}/${folder}`, model: `${folder}-chat`, apiKey: `fake-${folder}-key` }).then((res) => res.json());
+  const current = await makeProfile('Workspace default', 'default');
+  const override = await makeProfile('Per-job custom chat', 'override');
+  const setting = (id) => replay.request('/settings/ranking', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: id }) });
+  assert.equal((await setting(current.id)).status, 200);
+  const videoOptions = { url: 'https://youtu.be/dQw4w9WgXcQ', count: 1, mode: 'auto', platform: 'youtube-landscape', captionLanguage: 'es', hashtagLanguage: 'off' };
+  assert.equal((await replay.post('/projects', { ...videoOptions, aiProfile: '12121212-1212-1212-1212-121212121212' })).status, 404);
+  const video = await replay.post('/projects', { ...videoOptions, aiProfile: override.id });
   assert.equal(video.status, 202);
   job = await done(replay.request, (await video.json()).id);
   assert.equal(job.status, 'ready', job.error);
   assert.equal(job.sourceKind, 'replay');
+  assert.equal(job.engine, 'Per-job custom chat');
+  assert.deepEqual(calls, [{ route: '/override/chat/completions', key: 'Bearer fake-override-key', model: 'override-chat' }]);
+  assert.equal((await (await replay.request('/workspace')).json()).activeProviderId, current.id);
+  assert.equal((await setting(null)).status, 200);
+  assert.deepEqual(job.options.captionStyle, defaultCaptionStyle);
   assert.equal(job.captionsSource, 'YouTube transcript');
   assert.ok(job.signals.includes('Replay heatmap'));
   assert.equal(job.clips[0].withCaptions, true);

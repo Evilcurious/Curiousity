@@ -7,6 +7,8 @@ COPY scripts/build.mjs ./scripts/build.mjs
 COPY src ./src
 COPY shared ./shared
 COPY public ./public
+COPY server/assets/fonts ./server/assets/fonts
+COPY server/assets/*-FONTS-LICENSE.txt ./server/assets/
 RUN npm run build
 
 FROM node:22-bookworm-slim

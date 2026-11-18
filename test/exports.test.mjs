@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { exportFrame, frameFor, platforms } from '../shared/exports.mjs';
+import { exportFrame, frameFor, languageCode, languageLabel, platforms, romanUrdu } from '../shared/exports.mjs';
 import { jobOptions } from '../server/validation.mjs';
 import { localizeClips, suggestHashtags } from '../server/localization.mjs';
 import { makeAss } from '../server/moments.mjs';
+import { isLatinCaption, romanizeUrdu } from '../server/roman-urdu.mjs';
 
 const signal = new AbortController().signal;
 const original = [[{ start: 0.04, end: 1.5, text: 'This is the opening.' }, { start: 1.5, end: 3.3, text: 'Wait for the reveal.' }], []];
@@ -58,4 +59,52 @@ test('provider translation preserves cue timings and labels original on missing 
   assert.equal(fallback.language, 'en');
   assert.deepEqual(fallback.tracks, original);
   assert.match(fallback.warning, /Original captions were used/);
+});
+
+test('Roman Urdu is a separate script choice and offline romanization preserves cue times', async () => {
+  assert.equal(languageCode('ur-Latn-PK'), romanUrdu);
+  assert.equal(languageCode('ur-Arab-PK'), 'ur');
+  assert.equal(languageCode('Roman Urdu'), romanUrdu);
+  assert.equal(languageLabel(romanUrdu), 'Roman Urdu');
+  const options = jobOptions({ demo: true, count: 'auto', captionLanguage: 'ur-latn', hashtagLanguage: 'es' });
+  assert.deepEqual([options.captionLanguage, options.hashtagLanguage], [romanUrdu, 'es']);
+  const urdu = [[{ start: 0.04, end: 1.5, text: 'یَہ ایک اچھا clip ہے، ٹھیک؟ ۱۲:۳۰؛ ۵۰٪۔' }, { start: 2, end: 4, text: 'لاہور اور قلندر!' }], []];
+  const text = 'yeh aik achha clip hai, theek? 12:30; 50%.';
+  assert.equal(romanizeUrdu(urdu[0][0].text), text);
+  assert.match(romanizeUrdu(urdu[0][1].text), /^Lahore aur [a-z]+!$/);
+  assert.ok(!isLatinCaption('Not اردو'));
+  const requested = [];
+  const result = await localizeClips({ original: urdu, sourceLanguage: 'ur', target: romanUrdu, tryTrack: async (lang) => { requested.push(lang); return null; }, signal });
+  assert.deepEqual(requested, [romanUrdu]);
+  assert.equal(result.language, romanUrdu);
+  assert.equal(result.label, 'Local Urdu romanization');
+  assert.match(result.warning, /Review spellings/);
+  assert.deepEqual(result.tracks, [urdu[0].map((cue) => ({ ...cue, text: romanizeUrdu(cue.text) })), []]);
+  const fromUrduTrack = await localizeClips({ original, sourceLanguage: 'en', target: romanUrdu, tryTrack: async (lang) => lang === 'ur' ? { tracks: urdu } : null, signal });
+  assert.deepEqual(fromUrduTrack.tracks, result.tracks);
+  assert.equal(fromUrduTrack.language, romanUrdu);
+  const hashtags = suggestHashtags({ choice: 'es', transcriptLanguage: 'en', localizedLanguage: romanUrdu, translated: text });
+  assert.equal(hashtags.hashtagLanguage, 'es');
+  assert.ok(hashtags.hashtags.includes('#MejoresMomentos'));
+});
+
+test('asks the provider for Roman Urdu, rejecting Urdu script and unchanged non-Urdu text', async (t) => {
+  const provider = { type: 'custom', name: 'Mock translator', baseUrl: 'https://models.example', model: 'mock' };
+  let phrases = ['Yeh aaghaz hai.', 'Asal baat ka intezar karein.'];
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    const payload = JSON.parse(body);
+    assert.match(payload.messages[0].content, /Roman Urdu.*Latin letters.*Do not switch to English/);
+    return Response.json({ choices: [{ message: { content: JSON.stringify(JSON.parse(payload.messages[1].content).map(({ id }, index) => ({ id, text: phrases[index] }))) } }] });
+  });
+  const context = { original, sourceLanguage: 'en', target: romanUrdu, provider, store: { unseal: () => '' }, tryTrack: async () => null, tryEnglish: async () => assert.fail('Do not use English translation for Roman Urdu'), signal };
+  const result = await localizeClips(context);
+  assert.equal(result.language, romanUrdu);
+  assert.deepEqual(result.tracks[0], original[0].map((cue, i) => ({ ...cue, text: phrases[i] })));
+  for (const output of [['یہ آغاز ہے۔', 'انکشاف کا انتظار کریں۔'], original[0].map((cue) => cue.text)]) {
+    phrases = output;
+    const fallback = await localizeClips(context);
+    assert.equal(fallback.language, 'en');
+    assert.deepEqual(fallback.tracks, original);
+    assert.match(fallback.warning, /Could not produce Roman Urdu captions. Original captions were used/);
+  }
 });

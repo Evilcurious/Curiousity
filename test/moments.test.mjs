@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCandidates, clipCues, makeAss, makeSrt, parseVtt, pickMoments } from '../server/moments.mjs';
+import { buildCandidates, clipCues, makeAss, makeSrt, parseVtt, pickAutoMoments, pickMoments } from '../server/moments.mjs';
 import { jobOptions, youtubeSource } from '../server/validation.mjs';
 
 const example = 'dQw4w9WgXcQ';
@@ -42,4 +42,21 @@ test('VTT parsing, clipping and SRT/ASS keep caption timestamps relative to the 
   const ass = makeAss([{ start: 0, end: 1.6, text: 'a {b} \\N' }]);
   assert.match(ass, /Dialogue: 0,0:00:00\.00,0:00:01\.60/);
   assert.doesNotMatch(ass, /\{b\}|\\N/);
+});
+
+test('Auto keeps only strong non-overlapping clips, retains a cap and uses one honest fallback', () => {
+  assert.equal(jobOptions({ demo: true, count: 'auto' }).count, 'auto');
+  for (const count of [true, [4], 0, 1.5, 'automatic', 21]) assert.throws(() => jobOptions({ demo: true, count }), { status: 400 });
+  const { picks: empty } = pickAutoMoments(buildCandidates({ duration: 5, count: 'auto' }), 20);
+  assert.deepEqual(empty, []);
+  const flat = buildCandidates({ duration: 120, count: 'auto' });
+  assert.deepEqual(pickAutoMoments(flat, 20), { picks: [flat[0]], fallback: true });
+  const a = { start: 5, end: 25, score: 86 };
+  const b = { start: 50, end: 74, score: 71 };
+  const weak = { start: 80, end: 106, score: 61 };
+  const redundant = { start: 19, end: 44, score: 82 };
+  assert.deepEqual(pickAutoMoments([weak, b, redundant, a], 20), { picks: [a, b], fallback: false });
+  assert.deepEqual(pickAutoMoments([weak, a], 20), { picks: [a], fallback: false });
+  assert.deepEqual(pickAutoMoments([a, b], 1), { picks: [a], fallback: false });
+  assert.equal(pickAutoMoments(Array.from({ length: 25 }, (_, i) => ({ start: i * 20, end: i * 20 + 19, score: 70 })), 20).picks.length, 20);
 });

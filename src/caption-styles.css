@@ -1,0 +1,35 @@
+@font-face { font-family: 'Clipforge DejaVu Sans'; src: url('../server/assets/fonts/DejaVuSans-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Clipforge DejaVu Sans Mono'; src: url('../server/assets/fonts/DejaVuSansMono-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Clipforge DejaVu Serif'; src: url('../server/assets/fonts/DejaVuSerif-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Clipforge Noto Sans Arabic'; src: url('../server/assets/fonts/NotoSansArabic-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Clipforge Noto Sans Devanagari'; src: url('../server/assets/fonts/NotoSansDevanagari-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Clipforge Noto Sans Bengali'; src: url('../server/assets/fonts/NotoSansBengali-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+
+.caption-design { display: grid; gap: 11px; margin-top: 14px; }
+.caption-design-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.caption-design-head > span { display: flex; align-items: center; gap: 6px; color: #d5e4ce; font-size: 12px; font-weight: 800; }
+.caption-design-head > span > svg { color: #a0bd91; }
+.caption-design-head small { border: 1px solid #3d4b35; border-radius: 4px; padding: 3px 4px; color: #b4c2ae; font: 500 9.5px/1 var(--mono); }
+.caption-design-head .button { min-height: 29px; font-size: 11px; }
+.caption-design-head .button svg { width: 12px; }
+.caption-design-stage { display: grid; place-items: center; min-height: 248px; padding: 10px; border: 1px solid #343d2f; border-radius: 9px; background-color: #111610; background-image: radial-gradient(#3c5034 0.65px, transparent 0.65px), radial-gradient(ellipse, #23321d 0%, transparent 72%); background-size: 13px 13px, 100% 100%; }
+.caption-design-frame { position: relative; width: min(100%, var(--sample-width)); aspect-ratio: var(--sample-ratio); overflow: hidden; border-radius: 6px; outline: 1px solid #677a5b; background: linear-gradient(#070e0a12 30%, #080e0ac4 100%), url('/images/demo-studio.jpg') center 44% / cover no-repeat; box-shadow: 0 6px 18px #0009; }
+.caption-sample { position: absolute; inset: auto 8% var(--sample-bottom); text-align: center; color: var(--sample-color); font: 700 var(--sample-size)/1.25 var(--sample-font); overflow-wrap: anywhere; }
+.caption-sample-text { padding: 0 2px; paint-order: stroke fill; -webkit-text-stroke: var(--sample-stroke) var(--sample-edge); text-shadow: var(--sample-shadow); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.caption-sample[data-effect='box'] .caption-sample-text { padding: 2px 4px; border-radius: 2px; background: var(--sample-edge); }
+.caption-sample[data-animation='fade'] .caption-sample-entry { animation: cue-preview-in .18s ease-out both; }
+.caption-sample[data-animation='pop'] .caption-sample-entry { animation: cue-preview-pop .25s ease-out both; }
+.caption-sample[data-animation='rise'] .caption-sample-entry { animation: cue-preview-rise .22s ease-out both; }
+.caption-sample[data-exit='fade'] { animation: cue-preview-fade-out 2.55s linear; }
+.caption-sample[data-exit='shrink'] { animation: cue-preview-shrink-out 2.55s linear; }
+.caption-sample-word { animation: cue-preview-highlight .07s steps(1, end) both; }
+@keyframes cue-preview-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cue-preview-pop { from { transform: scale(.8); } 50% { transform: scale(1.07); } to { transform: scale(1); } }
+@keyframes cue-preview-rise { from { transform: translateY(30%); } to { transform: translateY(0); } }
+@keyframes cue-preview-fade-out { 0%, 82%, 100% { opacity: 1; } 90%, 98% { opacity: 0; } }
+@keyframes cue-preview-shrink-out { 0%, 82%, 100% { opacity: 1; transform: scale(1); } 90%, 98% { opacity: 0; transform: scale(.72); } }
+@keyframes cue-preview-highlight { to { color: var(--sample-highlight); } }
+.caption-design-options .form-field select:disabled { opacity: .65; cursor: default; }
+.caption-design-note { color: var(--muted); font-size: 11.5px; line-height: 1.48; }
+@media (max-width: 386px) { .form-pair.caption-design-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (prefers-reduced-motion: reduce) { .caption-sample, .caption-sample-entry, .caption-sample-word { animation: none !important; } }

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createStore } from '../server/store.mjs';
 import { listModels, providerInput, publicProvider, rankWithProvider, transcribeRemote } from '../server/providers.mjs';
+import { providerCatalog } from '../shared/providers.mjs';
 
 test('encrypts provider keys at rest and never exposes them in profiles', async (t) => {
   const path = await mkdtemp(join(tmpdir(), 'cf-keys-'));
@@ -59,4 +60,23 @@ test('remote transcription keeps detected caption language and per-chunk timesta
   assert.deepEqual(await transcribeRemote(profile, store, 'whisper-1', [audio, audio], 600, new AbortController().signal), {
     language: 'ur', cues: [{ start: 1, end: 2, text: 'یہ درست ہے۔' }, { start: 601, end: 602, text: 'یہ درست ہے۔' }],
   });
+});
+
+test('hosted presets pin their endpoint and saved keys do not follow editable URLs or types', () => {
+  const store = { seal: (value) => `sealed-${value}` };
+  const key = 'test-catalog-key';
+  for (const [type, definition] of Object.entries(providerCatalog)) {
+    if (definition.editableUrl) continue;
+    const profile = providerInput({ type, name: definition.name, apiKey: key, baseUrl: 'https://other.example/v1' }, null, store);
+    assert.equal(profile.baseUrl, definition.baseUrl);
+    assert.equal(profile.apiKey, `sealed-${key}`);
+    assert.throws(() => providerInput({ type, name: definition.name }, null, store), { status: 400 });
+  }
+  const local = providerInput({ type: 'lmstudio', name: 'On this host', model: 'model' }, null, store);
+  assert.equal(local.baseUrl, 'http://127.0.0.1:1234/v1');
+  const custom = providerInput({ type: 'custom', name: 'Custom chat', baseUrl: 'https://chat.example/v1/', apiKey: key }, null, store);
+  assert.equal(providerInput({ ...custom, apiKey: '' }, custom, store).apiKey, `sealed-${key}`);
+  assert.equal(providerInput({ ...custom, apiKey: '', baseUrl: 'https://other.example/v1' }, custom, store).apiKey, '');
+  assert.throws(() => providerInput({ ...custom, apiKey: '', type: 'deepseek' }, custom, store), { status: 400 });
+  assert.throws(() => providerInput({ type: 'custom', name: 'Custom', apiKey: key, baseUrl: 'http://chat.example' }, null, store), { status: 400 });
 });

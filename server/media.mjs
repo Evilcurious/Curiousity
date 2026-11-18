@@ -3,10 +3,12 @@ import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promi
 import { isAbsolute, join } from 'node:path';
 import { ROOT, ffmpeg, python, run, runYt, toolsStatus } from './tools.mjs';
 import { maxSourceBytes, maxSourceSeconds, jobDir } from './store.mjs';
-import { buildCandidates, clipCues, makeAss, makeSrt, normalizeCues, parseVtt, pickMoments } from './moments.mjs';
+import { buildCandidates, clipCues, normalizeCues, parseVtt, pickAutoMoments, pickMoments } from './moments.mjs';
+import { makeAss, makeSrt } from './captions.mjs';
+import { maxClips } from './validation.mjs';
 import { rankWithProvider, transcribeRemote } from './providers.mjs';
 import { liveArgs, livePlans, livePlanKey } from './live.mjs';
-import { exportFrame, languageCode, languageLabel } from '../shared/exports.mjs';
+import { exportFrame, languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { localizeClips, suggestHashtags } from './localization.mjs';
 
 const demoImage = join(ROOT, 'public', 'images', 'demo-studio.jpg');
@@ -229,7 +231,7 @@ function captionLocale(meta, target) {
 async function downloadCaptions(meta, url, scratch, signal, target) {
   const locale = captionLocale(meta, target);
   if (!locale) return null;
-  const prefix = target ? 'translated' : 'transcript';
+  const prefix = target ? `translated-${locale}` : 'transcript';
   try {
     await runYt(['--skip-download', '--write-subs', '--write-auto-subs', '--sub-langs', `^${locale}$`, '--sub-format', 'vtt', '--no-warnings', '-o', join(scratch, `${prefix}.%(ext)s`), '--', url], { signal, timeout: 90_000 });
     const file = (await readdir(scratch)).find((name) => name.startsWith(`${prefix}.`) && name.endsWith('.vtt'));
@@ -290,7 +292,7 @@ async function renderClip({ clip, path, options, rows, language, frame, dir, scr
   const poster = `${Math.max(2, 2 * Math.floor(width / 4))}:${Math.max(2, 2 * Math.floor(height / 4))}`;
   if (rows.length) {
     await writeFile(join(dir, 'captions.srt'), makeSrt(rows));
-    if (tools.subtitles) await writeFile(join(scratch, 'clip.ass'), makeAss(rows, frame, language));
+    if (tools.subtitles) await writeFile(join(scratch, 'clip.ass'), makeAss(rows, frame, language, options.captionStyle));
   }
   const filter = [
     '[0:v]split=2[back][front]',
@@ -366,12 +368,17 @@ export async function processProject(job, store, session, update) {
     if (isLive && !audio.length) warnings.push('The live window had no audio track. Clips can still be exported without spoken captions.');
     const heatmap = !isLive && Array.isArray(meta?.heatmap) ? meta.heatmap : [];
     const candidates = buildCandidates({ duration, count: options.count, cues: transcript.cues, audio, heatmap });
-    const activeProvider = store.state.providers.find((p) => p.id === store.state.activeProviderId);
-    const profile = !options.demo && activeProvider;
+    const automatic = options.count === 'auto';
+    const limit = automatic ? maxClips : options.count;
+    const selection = options.aiProfile || 'workspace';
+    const providerId = options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
+    const savedProfile = providerId ? store.state.providers.find((p) => p.id === providerId) : null;
+    const profile = savedProfile?.model ? { ...savedProfile } : null;
+    if (providerId && !profile) warnings.push('The selected AI profile or chat model is no longer available. Local scoring was used.');
     let engine = 'Local analysis', ordered = candidates;
     if (profile?.model && candidates.some((m) => m.excerpt)) {
       const eligible = candidates.filter((m) => m.excerpt.length > 15);
-      const pool = [...new Set([...pickMoments(eligible, Math.max(12, options.count)), ...eligible])].slice(0, Math.min(30, Math.max(14, options.count * 2)));
+      const pool = [...new Set([...pickMoments(eligible, Math.max(12, limit)), ...eligible])].slice(0, Math.min(30, Math.max(14, limit * 2)));
       if (pool.length) {
         update({ progress: 57, detail: `Ranking candidate moments with ${profile.name}.` });
         try {
@@ -387,23 +394,25 @@ export async function processProject(job, store, session, update) {
         }
       }
     } else if (profile?.model) warnings.push('The selected AI model needs a transcript; this source was scored locally.');
-    const picks = pickMoments(ordered, options.count);
+    const { picks, fallback } = automatic ? pickAutoMoments(ordered, limit) : { picks: pickMoments(ordered, limit), fallback: false };
     if (!picks.length) throw new Error('No playable moment could be found in the source.');
-    if (picks.length < options.count) warnings.push(`Found ${picks.length} distinct moments of ${options.count} requested. Longer sources can support more non-overlapping clips.`);
+    if (automatic) {
+      update({ autoSelection: { count: picks.length, fallback }, progress: 59, detail: `Auto selected ${picks.length} ${picks.length === 1 ? 'clip' : 'clips'} from this source.` });
+    } else if (picks.length < limit) warnings.push(`Found ${picks.length} distinct moments of ${limit} requested. Longer sources can support more non-overlapping clips.`);
     const originalRows = options.captions ? picks.map((moment) => clipCues(transcript.cues, moment.start, moment.end)) : picks.map(() => []);
     const asTracks = (result) => result && { tracks: picks.map((moment) => clipCues(result.cues, moment.start, moment.end)), label: result.label };
     let localized = { tracks: originalRows, language: transcript.language || null };
     const target = options.captionLanguage;
-    if (options.captions && target && target !== 'source' && target !== transcript.language) {
+    if (options.captions && target && target !== 'source' && (target !== transcript.language || target === romanUrdu)) {
       update({ progress: 60, detail: `Preparing ${languageLabel(target)} captions.` });
       localized = await localizeClips({ original: originalRows, sourceLanguage: transcript.language, target, provider: profile, store, signal,
-        tryTrack: async () => {
+        tryTrack: async (language) => {
           if (options.demo) {
             const translations = JSON.parse(await readFile(join(ROOT, 'server', 'assets', 'demo-translations.json'), 'utf8'));
-            const translated = translations[target];
+            const translated = translations[language];
             return translated?.length === transcript.cues.length ? asTracks({ cues: transcript.cues.map((row, i) => ({ ...row, text: translated[i] })), label: 'Bundled translation' }) : null;
           }
-          return isLive ? null : asTracks(await downloadCaptions(meta, options.url, scratch, signal, target));
+          return isLive ? null : asTracks(await downloadCaptions(meta, options.url, scratch, signal, language));
         },
         tryEnglish: path && tools.whisper && audio.some((db) => db > -58) ? async () => {
           try { return asTracks(await runWhisper(path, signal, true)); }
@@ -412,7 +421,7 @@ export async function processProject(job, store, session, update) {
       });
     }
     const anyCaptions = localized.tracks.some((rows) => rows.length);
-    if (localized.warning) warnings.push(options.demo ? 'The demo includes English, Urdu and Spanish caption tracks. Original English captions were used.' : localized.warning);
+    if (localized.warning) warnings.push(options.demo ? 'The demo includes English, Urdu, Roman Urdu and Spanish tracks. Original English captions were used.' : localized.warning);
     if (options.captions && !anyCaptions && !localized.warning && (!isLive || audio.length)) warnings.push(transcript.warning || 'No usable spoken captions were available for these clips.');
     if (anyCaptions && !tools.subtitles) warnings.push('This FFmpeg build does not support burned subtitles. SRT files are still available.');
     if (anyCaptions && tools.subtitles) await cp(captionFonts, join(scratch, 'caption-fonts'), { recursive: true });

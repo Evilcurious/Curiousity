@@ -143,6 +143,7 @@ app.get('/api/workspace', async (_req, res) => {
 app.get('/api/projects', (_req, res) => res.json(store.state.jobs.map(jobPublic)));
 app.post('/api/projects', async (req, res) => {
   const options = jobOptions(req.body || {});
+  if (!['workspace', 'local'].includes(options.aiProfile) && !profileById(options.aiProfile).model) throw new HttpError(400, 'Choose a chat model for this AI profile first.');
   const tools = await toolsStatus();
   if (!tools.ffmpeg || (!options.demo && !tools.ytDlp)) throw new HttpError(503, 'Media tools are missing. Open the Setup guide and run npm run setup.');
   if (options.tiktok && !tiktok.describe().connected) throw new HttpError(409, 'Connect a TikTok account before adding drafts to this project.');

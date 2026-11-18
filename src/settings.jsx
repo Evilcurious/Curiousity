@@ -1,17 +1,9 @@
 import { cloneElement, useEffect, useId, useState } from 'react';
-import { ArrowUpRight, BookOpen, Captions, Check, ChevronDown, CircleHelp, Clipboard, Cloud, Cpu, Download, Eye, EyeOff, KeyRound, Link2, LockKeyhole, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
+import { ArrowUpRight, BookOpen, Captions, Check, ChevronDown, CircleHelp, Clipboard, Cloud, Cpu, Download, Eye, EyeOff, KeyRound, Link2, LockKeyhole, Plus, RefreshCw, Search, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
 import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Modal, PageHeading, PanelHeading, TikTokIcon } from './ui.jsx';
 import { googleDestinations } from './delivery.jsx';
+import { providerCatalog as providers } from '../shared/providers.mjs';
 
-const providers = {
-  openai: { name: 'OpenAI', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-  anthropic: { name: 'Anthropic', url: 'https://api.anthropic.com/v1' },
-  gemini: { name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta' },
-  openrouter: { name: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
-  groq: { name: 'Groq', url: 'https://api.groq.com/openai/v1' },
-  ollama: { name: 'Ollama', url: 'http://127.0.0.1:11434/v1' },
-  custom: { name: 'OpenAI-compatible', url: '' },
-};
 function Field({ label, hint, children }) {
   const id = useId();
   return <div className="form-field"><label htmlFor={id}>{label}</label>{cloneElement(children, { id, 'aria-describedby': hint ? `${id}-hint` : undefined })}{hint && <small id={`${id}-hint`}>{hint}</small>}</div>;
@@ -22,14 +14,15 @@ function PasswordInput({ show, onToggle, ...props }) {
 function Select({ onChange, children, ...attrs }) { return <span className="select-wrap"><select {...attrs} onChange={onChange}>{children}</select><ChevronDown size={15}/></span>; }
 
 function ProviderDialog({ existing, onClose, onSaved }) {
-  const [fields, setFields] = useState(existing ? { ...existing, apiKey: '' } : { type: 'openai', name: '', baseUrl: providers.openai.url, apiKey: '', model: providers.openai.model });
+  const [fields, setFields] = useState(existing ? { ...existing, apiKey: '' } : { type: 'openai', name: '', baseUrl: providers.openai.baseUrl, apiKey: '', model: providers.openai.model });
   const [showKey, setShowKey] = useState(false), [models, setModels] = useState(null), [busy, setBusy] = useState(''), [error, setError] = useState('');
   const definition = providers[fields.type];
-  const configurable = ['custom', 'ollama'].includes(fields.type);
+  const configurable = definition.editableUrl;
+  const keepsKey = existing?.hasKey && existing.type === fields.type && (!configurable || fields.baseUrl.trim().replace(/\/$/, '') === existing.baseUrl);
   const set = (key, value) => setFields((state) => ({ ...state, [key]: value }));
   function setType(type) {
     setModels(null); setError('');
-    setFields((state) => ({ ...state, type, baseUrl: providers[type].url, model: providers[type].model || '', apiKey: '' }));
+    setFields((state) => ({ ...state, type, baseUrl: providers[type].baseUrl, model: providers[type].model || '', apiKey: '' }));
   }
   async function submit(action) {
     setBusy(action); setError('');
@@ -45,11 +38,11 @@ function ProviderDialog({ existing, onClose, onSaved }) {
     } catch (err) { setError(err.message); }
     finally { setBusy(''); }
   }
-  return <Modal title={existing ? 'Edit provider' : 'Add an AI provider'} subtitle="Save a named profile with its own key and model. You can add more than one profile per provider." onClose={onClose}>
+  return <Modal title={existing ? 'Edit provider' : 'Add an AI provider'} subtitle="Save a named profile with its own API key and model. Add more profiles for other keys, models or servers—even from the same provider." onClose={onClose}>
     <form className="modal-form" onSubmit={(event) => { event.preventDefault(); submit('save'); }}>
       <div className="form-pair"><Field label="Provider"><Select value={fields.type} onChange={(event) => setType(event.target.value)}>{Object.entries(providers).map(([key, val]) => <option key={key} value={key}>{val.name}</option>)}</Select></Field><Field label="Profile name"><input value={fields.name} maxLength={60} onChange={(event) => set('name', event.target.value)} placeholder={definition.name}/></Field></div>
-      {configurable && <Field label="API base URL" hint="Include /v1 or the path your server expects. The address is resolved from the Clipforge host."><input type="url" value={fields.baseUrl} onChange={(event) => { set('baseUrl', event.target.value); setModels(null); }} placeholder="https://example.com/v1" required={fields.type === 'custom'}/></Field>}
-      <Field label={configurable ? 'API key (optional)' : 'API key'} hint="Keys are encrypted on the server and never returned to the browser."><PasswordInput show={showKey} onToggle={() => setShowKey(!showKey)} value={fields.apiKey} onChange={(event) => { set('apiKey', event.target.value); setModels(null); }} placeholder={existing?.hasKey && existing.type === fields.type ? 'Leave blank to keep the saved key' : 'Paste your API key'}/></Field>
+      {configurable && <Field label="API base URL" hint="Include the API path (such as /v1). Changing the address does not carry the saved key over."><input type="url" value={fields.baseUrl} onChange={(event) => { set('baseUrl', event.target.value); setModels(null); }} placeholder="https://example.com/v1" required={fields.type === 'custom'}/></Field>}
+      <Field label={definition.optionalKey ? 'API key (optional)' : 'API key'} hint="Keys are encrypted on the server and never returned to the browser."><PasswordInput show={showKey} onToggle={() => setShowKey(!showKey)} value={fields.apiKey} onChange={(event) => { set('apiKey', event.target.value); setModels(null); }} placeholder={keepsKey ? 'Leave blank to keep the saved key' : 'Paste your API key'}/></Field>
       <div className="model-field"><Field label="Chat model ID" hint="Enter a model manually or fetch the provider’s catalog."><input value={fields.model} maxLength={160} onChange={(event) => set('model', event.target.value)} placeholder="Model ID" spellCheck="false"/></Field><Button onClick={() => submit('models')} busy={busy === 'models'} disabled={busy === 'save'} icon={RefreshCw}>Fetch models</Button></div>
       {models && (models.length ? <Field label="Available models"><Select value={models.includes(fields.model) ? fields.model : ''} onChange={(event) => { if (event.target.value) set('model', event.target.value); }}><option value="">Choose a model</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field> : <Banner tone="warning" icon={CircleHelp}>No models were listed. You can still enter a model ID manually.</Banner>)}
       {error && <Banner>{error}</Banner>}
@@ -61,9 +54,14 @@ function ProviderDialog({ existing, onClose, onSaved }) {
 export function Providers({ workspace, refresh, notify }) {
   const [dialog, setDialog] = useState(null), [confirm, setConfirm] = useState(null), [busy, setBusy] = useState(''), [error, setError] = useState('');
   const [captionId, setCaptionId] = useState(''), [captionModel, setCaptionModel] = useState('');
+  const [search, setSearch] = useState(''), [providerType, setProviderType] = useState(''), [shown, setShown] = useState(12);
   const profiles = workspace?.providers || [];
   const active = profiles.find((p) => p.id === workspace?.activeProviderId);
-  const compatible = profiles.filter((p) => !['anthropic', 'gemini'].includes(p.type));
+  const compatible = profiles.filter((p) => providers[p.type]?.kind === 'compatible');
+  const query = search.trim().toLowerCase();
+  const filtered = profiles.filter((p) => (!providerType || p.type === providerType) && `${p.name} ${providers[p.type]?.name || ''} ${p.model} ${p.baseUrl}`.toLowerCase().includes(query)).reverse();
+  const types = Object.entries(providers).filter(([type]) => profiles.some((p) => p.type === type));
+  const resetFilter = () => { setSearch(''); setProviderType(''); setShown(12); };
   useEffect(() => { setCaptionId(workspace?.captions.providerId || ''); setCaptionModel(workspace?.captions.model || ''); }, [workspace?.captions.providerId, workspace?.captions.model]);
   async function run(action, fn, message) {
     setBusy(action); setError('');
@@ -73,14 +71,21 @@ export function Providers({ workspace, refresh, notify }) {
   }
   const activate = (id) => run(id || 'local', () => api('/settings/ranking', { method: 'PUT', body: { providerId: id } }), id ? 'Highlight model updated.' : 'Switched to local analysis.');
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Bring your own API keys and choose a chat model for highlight ranking and caption translation."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
-    <div className="panel feature-panel ranking-banner"><Glyph icon={Sparkles}/><div><p className="eyebrow">ACTIVE HIGHLIGHT ENGINE</p><h2>{active?.name || 'Local analysis'}</h2><p>{active ? active.model : 'Scores transcript cues, audio activity, and replay data when available. No API key required.'}</p></div>{active ? <Button icon={Cpu} busy={busy === 'local'} onClick={() => activate(null)}>Use local analysis</Button> : <span className="badge badge-green"><i/>Active</span>}</div>
+    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Save as many profiles as you need. Each can have its own API key, endpoint and model. Choose your default here or pick one per project."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
+    <div className="panel feature-panel ranking-banner"><Glyph icon={Sparkles}/><div><p className="eyebrow">WORKSPACE DEFAULT</p><h2>{active?.name || 'Local analysis'}</h2><p>{active ? active.model : 'Scores transcript cues, audio activity, and replay data when available. No API key required.'}</p></div>{active ? <Button icon={Cpu} busy={busy === 'local'} onClick={() => activate(null)}>Use local analysis</Button> : <span className="badge badge-green"><i/>Active</span>}</div>
     <div className="section-heading settings-section-title"><h2>Provider profiles</h2><span className="muted">{profiles.length} saved</span></div>
+    {profiles.length > 0 && <div className="profiles-toolbar">
+      <label className="search-field"><Search size={16}/><input type="search" aria-label="Search provider profiles" value={search} onChange={(event) => { setSearch(event.target.value); setShown(12); }} placeholder="Search profiles, models or endpoints…"/></label>
+      <Select aria-label="Filter by provider" value={providerType} onChange={(event) => { setProviderType(event.target.value); setShown(12); }}><option value="">All providers</option>{types.map(([key, value]) => <option key={key} value={key}>{value.name}</option>)}</Select>
+    </div>}
     <div className="panel profile-panel">
-      {profiles.length ? profiles.map((profile) => <div className="profile-row" key={profile.id}><Glyph icon={Cpu} subtle/><div className="profile-info"><h3>{profile.name}</h3><p>{providers[profile.type]?.name} · {profile.model || 'No chat model selected'}</p></div><div className="profile-actions">{active?.id === profile.id ? <span className="badge badge-green"><i/>Active</span> : <Button disabled={!profile.model} busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}<Button onClick={() => setDialog(profile)}>Edit</Button><button className="icon-button" title="Remove provider" aria-label={`Remove ${profile.name}`} onClick={() => { setError(''); setConfirm(profile); }}><Trash2 size={16}/></button></div></div>) : <EmptyState icon={KeyRound} title="No providers added" action={<Button icon={Plus} onClick={() => setDialog('new')}>Add a provider</Button>}>Add OpenAI, Anthropic, Gemini, OpenRouter, Groq, Ollama, or an OpenAI-compatible endpoint.</EmptyState>}
+      {filtered.length ? filtered.slice(0, shown).map((profile) => <div className="profile-row" key={profile.id}><Glyph icon={Cpu} subtle/><div className="profile-info"><h3>{profile.name}</h3><p>{providers[profile.type]?.name} · {profile.model || 'No chat model selected'}</p></div><div className="profile-actions">{active?.id === profile.id ? <span className="badge badge-green"><i/>Default</span> : <Button disabled={!profile.model} busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}<Button onClick={() => setDialog(profile)}>Edit</Button><button className="icon-button" title="Remove provider" aria-label={`Remove ${profile.name}`} onClick={() => { setError(''); setConfirm(profile); }}><Trash2 size={16}/></button></div></div>)
+        : profiles.length ? <EmptyState icon={Search} title="No matching profiles" action={<Button onClick={resetFilter}>Clear filters</Button>}>Search by profile name, provider, model, or endpoint.</EmptyState>
+        : <EmptyState icon={KeyRound} title="No providers added" action={<Button icon={Plus} onClick={() => setDialog('new')}>Add a provider</Button>}>Choose a preset like OpenAI, Gemini, DeepSeek or LM Studio, or enter any OpenAI-compatible endpoint.</EmptyState>}
+      {filtered.length > 0 && (filtered.length > shown || filtered.length < profiles.length) && <div className="profiles-footer"><span>Showing {Math.min(shown, filtered.length)} of {profiles.length} profiles</span>{filtered.length > shown && <Button onClick={() => setShown((count) => count + 12)}>Show more</Button>}</div>}
     </div>
     <section className="panel service-panel">
-      <PanelHeading icon={Captions} title="Caption engine" description="Used when no usable captions come with the source."/>
+      <PanelHeading icon={Captions} title="Caption engine" description="For speech transcription when the source has no usable captions. This is separate from your project’s chat model."/>
       <form className="caption-form" onSubmit={(event) => { event.preventDefault(); run('captions', () => api('/settings/captions', { method: 'PUT', body: { providerId: captionId, model: captionModel } }), 'Caption engine updated.'); }}>
         <Field label="Transcription provider"><Select value={captionId} onChange={(event) => { setCaptionId(event.target.value); const profile = compatible.find((item) => item.id === event.target.value); setCaptionModel(profile?.type === 'openai' ? 'whisper-1' : profile?.type === 'groq' ? 'whisper-large-v3-turbo' : ''); }}><option value="">Local Whisper</option>{compatible.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field>
         {captionId && <Field label="Transcription model" hint="Must support verbose_json with segment timestamps."><input value={captionModel} onChange={(event) => setCaptionModel(event.target.value)} maxLength={160} spellCheck="false" placeholder="e.g. whisper-1" required/></Field>}
@@ -88,8 +93,8 @@ export function Providers({ workspace, refresh, notify }) {
       </form>
       <p className="privacy-note"><ShieldCheck size={16}/> External models may receive transcript excerpts or audio and incur usage costs. Keep Local analysis and Local Whisper selected to avoid sending content to AI providers.</p>
     </section>
-    {dialog && <ProviderDialog existing={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSaved={(message) => { setDialog(null); refresh(); notify(message); }}/>}
-    {confirm && <Confirm title={`Remove ${confirm.name}?`} message="Any workflow using this profile will return to its local engine." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
+    {dialog && <ProviderDialog existing={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSaved={(message) => { if (dialog === 'new') resetFilter(); setDialog(null); refresh(); notify(message); }}/>}
+    {confirm && <Confirm title={`Remove ${confirm.name}?`} message="This removes the saved key. If this was your workspace default or transcription engine, new projects will use the local engine instead." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
   </div>;
 }
 
@@ -210,6 +215,7 @@ export function Setup({ workspace, refresh, notify }) {
     <PageHeading label="SELF-HOSTED WORKSPACE" title="Setup guide" subtitle="Run Clipforge on your computer or bring it to your own server."/>
     <div className="setup-grid"><section className="panel service-panel"><PanelHeading icon={Terminal} title="Run locally" description="Node.js 22+, Python 3.10+ and a terminal."/><p className="setup-copy">From the repository folder, install the website and media tools. Then open <code>http://localhost:5173</code>.</p><CommandBlock notify={notify}>{'npm ci\nnpm run setup\nnpm run dev'}</CommandBlock><p className="setup-copy">The first local transcription downloads the Whisper model. To fetch it ahead of time, run <code>npm run setup -- --download-model</code>.</p></section>
     <section className="panel service-panel"><PanelHeading icon={Server} title="Run on a VPS" description="Run as a Node service. No Docker required."/><p className="setup-copy">Copy the example environment file and set a strong <code>AUTH_PASSWORD</code> before starting.</p><CommandBlock notify={notify}>{'cp .env.example .env\n# Edit .env to set AUTH_PASSWORD\nnpm ci\nnpm run setup\nnpm run build\nnpm start'}</CommandBlock><p className="setup-copy">Proxy the app through HTTPS and keep port 5173 private. See the repository README for example deployment and data backup instructions.</p></section></div>
+    <section className="panel service-panel how-to-panel"><PanelHeading icon={Captions} title="Try the caption tools" description="No YouTube link or API key needed for the sample."/><ol><li>In <a href="#/studio">Studio</a>, choose <b>Auto</b> under Number of clips and set Caption language to <b>Roman Urdu</b>.</li><li>Open <b>Caption style → Customize</b> to preview fonts, effects, and in/out animations. Apply your style, then click <b>Try demo</b>.</li><li>Download an MP4 with burned-in styling, or a plain-text SRT. For your own videos, choose an AI provider profile to translate other languages into Roman Urdu when no suitable caption track is available.</li></ol></section>
     <section className="panel service-panel tool-panel"><PanelHeading icon={Download} title="System checks" description="Tools detected on this server."><Button icon={RefreshCw} busy={busy} onClick={check}>Recheck</Button></PanelHeading><div className="tool-list">{[['FFmpeg', online?.ffmpeg, 'Reads and renders media'], ['yt-dlp', online?.ytDlp, 'Imports authorized YouTube sources'], ['Burned captions', online?.subtitles, 'FFmpeg libass subtitle filter'], ['Whisper', online?.whisper, 'Local speech recognition package']].map(([title, ready, detail]) => <div key={title}><div><strong>{title}</strong><p>{detail}</p></div><span className={`badge ${ready ? 'badge-green' : ''}`}><i/>{ready ? 'Installed' : ready === false ? 'Not found' : 'Unknown'}</span></div>)}</div></section>
   </div>;
 }

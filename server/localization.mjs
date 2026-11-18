@@ -1,17 +1,34 @@
-import { languageLabel } from '../shared/exports.mjs';
+import { languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { translateWithProvider } from './providers.mjs';
+import { isLatinCaption, romanizeUrdu } from './roman-urdu.mjs';
 
 export async function localizeClips({ original, sourceLanguage, target, provider, store, tryTrack, tryEnglish, signal }) {
   const fallback = { tracks: original, language: sourceLanguage || null };
-  if (!target || target === 'source' || target === sourceLanguage) return fallback;
+  const isRoman = (tracks) => tracks.every((rows) => rows.every(({ text }) => isLatinCaption(text)));
+  const normalize = (value) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  const justCopied = (tracks) => !['ur', romanUrdu].includes(sourceLanguage) && original.some((rows) => rows.some(({ text }) => normalize(text).length > 12))
+    && tracks.every((rows, i) => rows.every((cue, j) => normalize(cue.text) === normalize(original[i][j].text)));
+  if (!target || target === 'source' || (target === sourceLanguage && (target !== romanUrdu || isRoman(original)))) return fallback;
   const usable = (result) => result && result.tracks.some((rows) => rows.length) && result.tracks.every((rows, i) => !original[i].length || rows.length);
-  const fromTrack = await tryTrack();
-  if (usable(fromTrack)) return { ...fromTrack, language: target };
+  if (target === romanUrdu && sourceLanguage === 'ur' && original.some((rows) => rows.length) && isRoman(original)) {
+    return { tracks: original, language: romanUrdu };
+  }
+  const fromTrack = await tryTrack(target);
+  if (usable(fromTrack) && (target !== romanUrdu || isRoman(fromTrack.tracks))) return { ...fromTrack, language: target };
   if (provider?.model && original.some((rows) => rows.length)) {
     try {
       const tracks = await translateWithProvider(provider, store, target, original, signal);
-      return { tracks, language: target, label: `${provider.name} translation` };
-    } catch (error) { if (signal.aborted) throw signal.reason; }
+      if (target !== romanUrdu || !justCopied(tracks)) return { tracks, language: target, label: `${provider.name} translation` };
+    } catch (error) { if (signal?.aborted) throw signal.reason; }
+  }
+  if (target === romanUrdu) {
+    const urdu = ['ur', romanUrdu].includes(sourceLanguage) && original.some((rows) => rows.length) ? { tracks: original } : await tryTrack('ur');
+    if (usable(urdu)) {
+      const tracks = urdu.tracks.map((rows) => rows.map((cue) => ({ ...cue, text: romanizeUrdu(cue.text) })));
+      if (tracks.every((rows) => rows.every(({ text }) => text.trim())) && isRoman(tracks)) {
+        return { tracks, language: romanUrdu, label: 'Local Urdu romanization', warning: 'Roman Urdu was generated locally from Urdu text. Review spellings and names; written Urdu often omits short vowels.' };
+      }
+    }
   }
   if (target === 'en' && tryEnglish) {
     const english = await tryEnglish();
@@ -23,6 +40,7 @@ export async function localizeClips({ original, sourceLanguage, target, provider
 }
 
 const tags = {
+  [romanUrdu]: ['AhamLamhe', 'ChotiVideo', 'LiveJhalakiyan'],
   en: ['Highlights', 'ShortVideo', 'LiveHighlights'], ur: ['جھلکیاں', 'مختصرویڈیو', 'لائیوجھلکیاں'], hi: ['झलकियाँ', 'छोटावीडियो', 'लाइवझलकियाँ'],
   ar: ['أبرز_اللحظات', 'فيديو_قصير', 'لقطات_البث'], bn: ['সেরামুহূর্ত', 'ছোটভিডিও', 'লাইভঝলক'], zh: ['精彩片段', '短视频', '直播精华'],
   fr: ['TempsForts', 'VidéoCourte', 'ExtraitDuDirect'], de: ['Höhepunkte', 'Kurzvideo', 'LivestreamHighlights'], id: ['MomenTerbaik', 'VideoPendek', 'SorotanSiaran'],

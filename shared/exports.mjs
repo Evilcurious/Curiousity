@@ -11,8 +11,10 @@ export const ratioChoices = [
   { value: '9:16', name: 'Vertical' }, { value: '4:5', name: 'Portrait' }, { value: '1:1', name: 'Square' }, { value: '16:9', name: 'Landscape' },
 ];
 
+export const romanUrdu = 'ur-Latn';
+
 export const languages = Object.freeze({
-  en: 'English', ur: 'Urdu', hi: 'Hindi', ar: 'Arabic', bn: 'Bengali', zh: 'Chinese', fr: 'French', de: 'German', id: 'Indonesian', it: 'Italian', ja: 'Japanese', ko: 'Korean', pt: 'Portuguese', ru: 'Russian', es: 'Spanish', tr: 'Turkish',
+  en: 'English', ur: 'Urdu', [romanUrdu]: 'Roman Urdu', hi: 'Hindi', ar: 'Arabic', bn: 'Bengali', zh: 'Chinese', fr: 'French', de: 'German', id: 'Indonesian', it: 'Italian', ja: 'Japanese', ko: 'Korean', pt: 'Portuguese', ru: 'Russian', es: 'Spanish', tr: 'Turkish',
 });
 
 export function frameFor(value) {
@@ -34,6 +36,7 @@ export function exportFrame(options = {}) {
 
 export function languageCode(value) {
   const cleaned = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (/^ur[-_]latn(?:[-_].+)?$/.test(cleaned)) return romanUrdu;
   const ISO = cleaned.match(/^([a-z]{2})(?:[-_].+)?$/)?.[1];
   return ISO || Object.entries(languages).find(([, name]) => name.toLowerCase() === cleaned)?.[0] || null;
 }

@@ -4,6 +4,7 @@ import { ACTIVE, ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Jo
 import { DemoRow, ProjectRow } from './studio.jsx';
 import { availableDestinations, clipRatio, clipUploading, GoogleDeliveryStatus, GoogleUploadReview } from './delivery.jsx';
 import { exportFrame, languageLabel, platforms } from '../shared/exports.mjs';
+import { captionScriptFont, captionStyleLabel } from '../shared/captions.mjs';
 
 export function Library({ projects, error, createProject, notify }) {
   const [query, setQuery] = useState('');
@@ -103,6 +104,8 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
   const uploading = job.clips.some(clipUploading);
   const frame = job.frame || exportFrame(job.options);
   const platform = platforms[job.options.platform] || platforms.universal;
+  const styledLanguage = job.clips.find((clip) => clip.burnedCaptions)?.captionLanguage;
+  const styleLabel = captionStyleLabel(captionScriptFont(styledLanguage) ? { ...job.options.captionStyle, font: 'auto' } : job.options.captionStyle);
   const google = workspace?.google;
   const clipToPlay = job.clips.find((clip) => clip.id === preview);
   const clipToSend = job.clips.find((clip) => clip.id === googleReview);
@@ -112,7 +115,12 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
     setError(''); setBusy(action);
     try {
       if (action === 'delete') await removeProject(job.id);
-      else if (action === 'retry') await createProject(job.options);
+      else if (action === 'retry') {
+        const { aiProfile } = job.options;
+        const unavailable = workspace && aiProfile && !['local', 'workspace'].includes(aiProfile) && !workspace.providers.some((profile) => profile.id === aiProfile && profile.model);
+        await createProject(unavailable ? { ...job.options, aiProfile: 'local' } : job.options);
+        if (unavailable) notify('That AI profile is no longer available. Retrying with local analysis.');
+      }
       else {
         const route = action === 'status' ? `/clips/${clip.id}/tiktok/check` : `/${action}`;
         updateProject(await api(`/projects/${job.id}${route}`, { method: 'POST' }));
@@ -132,7 +140,10 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
     {!active && !ready && <section className="panel failure-panel"><Glyph icon={CircleAlert}/><div><h2>{job.status === 'cancelled' ? 'Project stopped' : 'Couldn’t finish this project'}</h2><p>{job.detail}</p><div className="failure-actions"><Button icon={RefreshCw} tone="primary" busy={busy === 'retry'} onClick={() => runAction('retry')}>Try again</Button><ActionLink href="#/studio">Back to studio</ActionLink></div></div></section>}
     {job.warnings?.map((warning, index) => <Banner key={index} tone="warning" icon={Info}>{warning}</Banner>)}
     {!!job.clips.length && <>
-      <div className="section-heading results-head"><div><h2>{job.clips.length} {job.clips.length === 1 ? 'clip' : 'clips'} {ready ? 'ready' : 'rendered'}</h2><p>{platform.name} · {frame.ratio} · {frame.width} × {frame.height} MP4{job.engine ? ` · ${job.engine}` : ''}{job.signals?.length ? ` · ${job.signals.join(', ')}` : ''}</p></div><JobBadge state={job.status}/></div>
+      <div className="section-heading results-head"><div><h2>{job.clips.length} {job.clips.length === 1 ? 'clip' : 'clips'} {ready ? 'ready' : 'rendered'}</h2><p>{platform.name} · {frame.ratio} · {frame.width} × {frame.height} MP4{job.engine ? ` · ${job.engine}` : ''}{job.signals?.length ? ` · ${job.signals.join(', ')}` : ''}</p>
+        {job.autoSelection && <p className="auto-count-summary"><Sparkles size={13}/>{job.autoSelection.fallback ? 'Auto count: kept the best available moment; none stood out from the rest.' : `Auto count: selected ${job.autoSelection.count} distinct ${job.autoSelection.count === 1 ? 'highlight' : 'highlights'}.`}</p>}
+        {job.options.captionStyle && job.clips.some((clip) => clip.burnedCaptions) && <p className="export-style-summary"><Captions size={13}/>{styleLabel} · Burned into MP4</p>}
+      </div><JobBadge state={job.status}/></div>
       {canShare && <div className="panel share-bar"><Glyph icon={TikTokIcon}/><div><h3>TikTok drafts</h3><p>{job.options.tiktok ? 'Select the clips you want to send, then review and approve the batch.' : 'Choose clips to send to your TikTok inbox.'}</p></div><Button tone={shareCount ? 'primary' : 'neutral'} icon={ArrowRight} disabled={!shareCount} onClick={() => setReview(true)}>{shareCount ? `Review ${shareCount} selected` : 'Review selected'}</Button></div>}
       {job.options.tiktok && !canShare && ready && <Banner tone="warning" icon={TikTokIcon}>Connect TikTok in <a href="#/integrations">Integrations</a> to review and send these drafts.</Banner>}
       <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} notify={notify}/>)}</div>

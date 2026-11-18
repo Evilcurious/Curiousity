@@ -10,6 +10,9 @@ export async function buildWeb({ watch = false } = {}) {
   if (!watch) rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
   cpSync(join(root, 'public'), dist, { recursive: true, force: true });
+  const licenses = join(dist, 'licenses');
+  mkdirSync(licenses, { recursive: true });
+  for (const input of ['DEJAVU-FONTS-LICENSE.txt', 'NOTO-FONTS-LICENSE.txt']) cpSync(join(root, 'server', 'assets', input), join(licenses, input));
   const options = {
     absWorkingDir: root,
     entryPoints: ['src/main.jsx'],
@@ -21,7 +24,7 @@ export async function buildWeb({ watch = false } = {}) {
     jsx: 'automatic',
     define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production') },
     target: ['es2022'],
-    loader: { '.woff': 'file', '.woff2': 'file' },
+    loader: { '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
     external: ['/images/*'],
     minify: !watch,
     legalComments: 'linked',
