@@ -5,6 +5,7 @@ RUN npm ci
 COPY index.html ./
 COPY scripts/build.mjs ./scripts/build.mjs
 COPY src ./src
+COPY shared ./shared
 COPY public ./public
 RUN npm run build
 
@@ -18,6 +19,7 @@ COPY --from=web /app/dist ./dist
 COPY public ./public
 COPY scripts ./scripts
 COPY server ./server
+COPY shared ./shared
 RUN npm run setup && install -d -m 700 -o node -g node /data
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=5173 DATA_DIR=/data WHISPER_CACHE=/data/models
 USER node

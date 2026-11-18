@@ -8,6 +8,7 @@ import { processProject } from './media.mjs';
 import { HttpError, jobOptions, maxClips, liveLimits, text } from './validation.mjs';
 import { compatibleProvider, listModels, providerInput, publicProvider } from './providers.mjs';
 import { createTikTok } from './tiktok.mjs';
+import { createGoogle, googleUploadActive, publicGoogleUploads } from './google.mjs';
 import { ROOT, toolsStatus } from './tools.mjs';
 
 const dev = process.argv.includes('--dev');
@@ -35,14 +36,16 @@ for (const job of store.state.jobs) {
 }
 if (recovering) store.save();
 const tiktok = createTikTok(store);
+const google = createGoogle(store);
 let current;
 let closing = false;
+const deleting = new Set();
 const absoluteMedia = join(ROOT, 'dist');
 
 const hash = (value) => createHash('sha256').update(value).digest();
 const jobById = (id) => {
   const job = store.state.jobs.find((item) => item.id === id);
-  if (!job) throw new HttpError(404, 'This project could not be found.');
+  if (!job || deleting.has(id)) throw new HttpError(404, 'This project could not be found.');
   return job;
 };
 const clipById = (job, id) => {
@@ -56,10 +59,10 @@ const profileById = (id) => {
   return profile;
 };
 function jobPublic(job) {
-  return { ...job, clips: job.clips.map(({ tiktok: posting, ...clip }) => {
+  return { ...job, clips: job.clips.map(({ tiktok: posting, googleUploads, ...clip }) => {
     const base = `/api/projects/${job.id}/clips/${clip.id}`;
     return { ...clip, videoUrl: `${base}/video.mp4`, posterUrl: clip.withPoster ? `${base}/poster.jpg` : null, captionsUrl: clip.withCaptions ? `${base}/captions.srt` : null,
-      tiktok: posting ? { state: posting.state, reason: posting.reason, canCheck: Boolean(posting.publishId) } : null };
+      googleUploads: publicGoogleUploads(googleUploads), tiktok: posting ? { state: posting.state, reason: posting.reason, canCheck: Boolean(posting.publishId) } : null };
   }) };
 }
 function touch(job, changes) {
@@ -95,6 +98,16 @@ app.get('/api/tiktok/callback', async (req, res) => {
   res.clearCookie('cf_tiktok_state', { httpOnly: true, sameSite: 'lax', secure: true, path: '/api/tiktok/callback' });
   res.set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').redirect(303, `/#/integrations?notice=${encodeURIComponent(result)}`);
 });
+app.get('/api/google/callback', async (req, res) => {
+  let result = 'Google connected.';
+  try {
+    const cookie = (req.get('cookie') || '').split(/;\s*/).find((item) => item.startsWith('cf_google_state='))?.slice('cf_google_state='.length);
+    if (!cookie || cookie !== req.query.state) throw new HttpError(400, 'This Google connection was not started in this browser. Try again from Integrations.');
+    await google.callback(req.query);
+  } catch (error) { result = error instanceof HttpError ? error.message : 'Google connection failed.'; }
+  res.clearCookie('cf_google_state', { httpOnly: true, sameSite: 'lax', path: '/api/google/callback' });
+  res.set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').redirect(303, `/#/integrations?notice=${encodeURIComponent(result)}`);
+});
 if (password) {
   const expected = hash(`${user}:${password}`);
   app.use((req, res, next) => {
@@ -125,7 +138,7 @@ app.use('/api', express.json({ limit: '96kb' }));
 app.get('/api/workspace', async (_req, res) => {
   const { providers, activeProviderId, captions } = store.state;
   res.json({ online: true, tools: await toolsStatus(), providers: providers.map(publicProvider), activeProviderId, captions,
-    tiktok: tiktok.describe(), maxClips, liveLimits, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
+    tiktok: tiktok.describe(), google: google.describe(), maxClips, liveLimits, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
 });
 app.get('/api/projects', (_req, res) => res.json(store.state.jobs.map(jobPublic)));
 app.post('/api/projects', async (req, res) => {
@@ -159,10 +172,13 @@ app.post('/api/projects/:id/finish-capture', (req, res) => {
 });
 app.delete('/api/projects/:id', async (req, res) => {
   const job = jobById(req.params.id);
-  if (activeStatuses.has(job.status) || job.clips.some((clip) => ['queued', 'uploading', 'processing'].includes(clip.tiktok?.state))) throw new HttpError(409, 'Wait for the project and any uploads to finish before deleting it.');
-  await rm(jobDir(job.id), { recursive: true, force: true });
-  store.state.jobs = store.state.jobs.filter((item) => item !== job);
-  store.save();
+  if (activeStatuses.has(job.status) || job.clips.some((clip) => googleUploadActive(clip) || ['queued', 'uploading', 'processing'].includes(clip.tiktok?.state))) throw new HttpError(409, 'Wait for the project and any uploads to finish before deleting it.');
+  deleting.add(job.id);
+  try {
+    await rm(jobDir(job.id), { recursive: true, force: true });
+    store.state.jobs = store.state.jobs.filter((item) => item !== job);
+    store.save();
+  } finally { deleting.delete(job.id); }
   res.status(204).end();
 });
 app.get('/api/projects/:id/clips/:clip/:file', (req, res, next) => {
@@ -175,6 +191,11 @@ app.get('/api/projects/:id/clips/:clip/:file', (req, res, next) => {
   const filename = `clipforge-${job.id.slice(0, 8)}-${clip.id}.${file.split('.').at(-1)}`;
   if (req.query.download === '1') res.download(path, filename, { dotfiles: 'allow' }, (error) => { if (error) next(error); });
   else res.sendFile(path, { dotfiles: 'allow' }, (error) => { if (error) next(error); });
+});
+app.post('/api/projects/:id/google', (req, res) => {
+  const job = jobById(req.params.id);
+  google.queue(job, req.body || {});
+  res.status(202).json(jobPublic(job));
 });
 app.post('/api/projects/:id/tiktok', (req, res) => {
   const job = jobById(req.params.id);
@@ -232,6 +253,14 @@ app.put('/api/settings/captions', (req, res) => {
   store.save();
   res.json(store.state.captions);
 });
+app.put('/api/google/config', (req, res) => res.json(google.configure(req.body || {})));
+app.post('/api/google/connect', (req, res) => {
+  const origin = req.get('origin') || `${req.protocol}://${req.get('host')}`;
+  const link = google.connect(req.body?.targets, origin);
+  res.cookie('cf_google_state', link.state, { secure: link.secure, httpOnly: true, sameSite: 'lax', maxAge: 600_000, path: '/api/google/callback' });
+  res.json({ url: link.url });
+});
+app.post('/api/google/disconnect', (_req, res) => { google.disconnect(); res.json(google.describe()); });
 app.put('/api/tiktok/config', (req, res) => res.json(tiktok.configure(req.body || {})));
 app.post('/api/tiktok/connect', (_req, res) => {
   const url = tiktok.connect();

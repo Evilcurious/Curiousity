@@ -24,7 +24,7 @@ export function createStore(root = dataRoot) {
     writeFileSync(keyPath, key, { flag: 'wx', mode: 0o600 });
   }
   if (key.length !== 32) throw new Error('Workspace key is invalid. Restore the original data directory and key.');
-  let state = { jobs: [], providers: [], activeProviderId: null, captions: { providerId: null, model: '' }, tiktok: {} };
+  let state = { jobs: [], providers: [], activeProviderId: null, captions: { providerId: null, model: '' }, tiktok: {}, google: {} };
   try { state = { ...state, ...JSON.parse(readFileSync(filename, 'utf8')) }; } catch (error) {
     if (error.code !== 'ENOENT') throw new Error('Could not read workspace.json. Restore it from a valid backup.', { cause: error });
   }

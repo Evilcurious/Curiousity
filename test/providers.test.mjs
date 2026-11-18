@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createStore } from '../server/store.mjs';
-import { listModels, providerInput, publicProvider, rankWithProvider } from '../server/providers.mjs';
+import { listModels, providerInput, publicProvider, rankWithProvider, transcribeRemote } from '../server/providers.mjs';
 
 test('encrypts provider keys at rest and never exposes them in profiles', async (t) => {
   const path = await mkdtemp(join(tmpdir(), 'cf-keys-'));
@@ -38,4 +38,25 @@ test('lists compatible models and constrains remote ranking to real moment IDs',
   const score = await rankWithProvider(profile, store, [{ id: 'm1', start: 4, end: 24, excerpt: 'Here is the highlight.', score: 65 }]);
   assert.deepEqual([...score], [['m1', { score: 100, title: 'A good hook', reason: 'Works alone.' }]]);
   assert.equal(mock.mock.callCount(), 2);
+});
+
+
+test('remote transcription keeps detected caption language and per-chunk timestamps', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'cf-language-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const store = createStore(folder);
+  const audio = join(folder, 'audio.mp3');
+  await writeFile(audio, Buffer.alloc(32));
+  const profile = providerInput({ type: 'openai', name: 'Audio', apiKey: 'mock-key' }, null, store);
+  t.mock.method(globalThis, 'fetch', async (url, { body, headers }) => {
+    assert.equal(url, 'https://api.openai.com/v1/audio/transcriptions');
+    assert.equal(headers.Authorization, 'Bearer mock-key');
+    assert.equal(body.get('response_format'), 'verbose_json');
+    assert.equal(body.get('timestamp_granularities[]'), 'segment');
+    assert.equal(body.get('file').size, 32);
+    return Response.json({ language: 'Urdu', segments: [{ start: 1, end: 2, text: 'یہ درست ہے۔' }] });
+  });
+  assert.deepEqual(await transcribeRemote(profile, store, 'whisper-1', [audio, audio], 600, new AbortController().signal), {
+    language: 'ur', cues: [{ start: 1, end: 2, text: 'یہ درست ہے۔' }, { start: 601, end: 602, text: 'یہ درست ہے۔' }],
+  });
 });

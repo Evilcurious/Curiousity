@@ -1,3 +1,5 @@
+import { frameFor, languages, platforms } from '../shared/exports.mjs';
+
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -35,7 +37,16 @@ export function jobOptions(body = {}) {
   if (!Number.isInteger(count) || count < 1 || count > maxClips) throw new HttpError(400, `Choose between 1 and ${maxClips} clips.`);
   const mode = ['auto', 'recorded', 'live'].includes(body.mode) ? body.mode : 'auto';
   const liveMinutes = liveLimits.includes(Number(body.liveMinutes)) ? Number(body.liveMinutes) : 2;
-  return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true };
+  const platform = body.platform ?? 'universal';
+  if (typeof platform !== 'string' || !Object.hasOwn(platforms, platform)) throw new HttpError(400, 'Choose a supported export platform.');
+  const frame = frameFor(body.aspectRatio ?? platforms[platform].ratio);
+  if (!frame) throw new HttpError(400, 'Enter a ratio like 3:2. Use whole numbers from 1 to 100 and stay between 1:4 and 4:1.');
+  const captionLanguage = body.captionLanguage ?? 'source';
+  const hashtagLanguage = body.hashtagLanguage ?? 'source';
+  if (captionLanguage !== 'source' && (typeof captionLanguage !== 'string' || !Object.hasOwn(languages, captionLanguage))) throw new HttpError(400, 'Choose a supported caption language.');
+  if (!['source', 'off'].includes(hashtagLanguage) && (typeof hashtagLanguage !== 'string' || !Object.hasOwn(languages, hashtagLanguage))) throw new HttpError(400, 'Choose a supported hashtag language.');
+  return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true,
+    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage };
 }
 
 export function text(value, max, fallback = '') {

@@ -1,6 +1,7 @@
 import { cloneElement, useEffect, useId, useState } from 'react';
-import { ArrowUpRight, BookOpen, Captions, Check, ChevronDown, CircleHelp, Clipboard, Cpu, Download, Eye, EyeOff, KeyRound, Link2, LockKeyhole, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
+import { ArrowUpRight, BookOpen, Captions, Check, ChevronDown, CircleHelp, Clipboard, Cloud, Cpu, Download, Eye, EyeOff, KeyRound, Link2, LockKeyhole, Plus, RefreshCw, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
 import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Modal, PageHeading, PanelHeading, TikTokIcon } from './ui.jsx';
+import { googleDestinations } from './delivery.jsx';
 
 const providers = {
   openai: { name: 'OpenAI', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
@@ -72,7 +73,7 @@ export function Providers({ workspace, refresh, notify }) {
   }
   const activate = (id) => run(id || 'local', () => api('/settings/ranking', { method: 'PUT', body: { providerId: id } }), id ? 'Highlight model updated.' : 'Switched to local analysis.');
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Bring your own API keys and choose the model that ranks your highlights."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
+    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Bring your own API keys and choose a chat model for highlight ranking and caption translation."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
     <div className="panel feature-panel ranking-banner"><Glyph icon={Sparkles}/><div><p className="eyebrow">ACTIVE HIGHLIGHT ENGINE</p><h2>{active?.name || 'Local analysis'}</h2><p>{active ? active.model : 'Scores transcript cues, audio activity, and replay data when available. No API key required.'}</p></div>{active ? <Button icon={Cpu} busy={busy === 'local'} onClick={() => activate(null)}>Use local analysis</Button> : <span className="badge badge-green"><i/>Active</span>}</div>
     <div className="section-heading settings-section-title"><h2>Provider profiles</h2><span className="muted">{profiles.length} saved</span></div>
     <div className="panel profile-panel">
@@ -90,6 +91,64 @@ export function Providers({ workspace, refresh, notify }) {
     {dialog && <ProviderDialog existing={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSaved={(message) => { setDialog(null); refresh(); notify(message); }}/>}
     {confirm && <Confirm title={`Remove ${confirm.name}?`} message="Any workflow using this profile will return to its local engine." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
   </div>;
+}
+
+function ConnectionBadge({ online }) { return <span className={`badge ${online ? 'badge-green' : ''}`}><i/>{online ? 'Connected' : 'Not connected'}</span>; }
+
+function GoogleConnection({ google, refresh, notify }) {
+  const origin = window.location.origin;
+  const suggestedCallback = `${origin}/api/google/callback`;
+  const [fields, setFields] = useState({ clientId: '', clientSecret: '', redirectUri: suggestedCallback });
+  const [targets, setTargets] = useState({ drive: true, youtube: false });
+  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [disconnect, setDisconnect] = useState(false);
+  useEffect(() => setFields({ clientId: google?.clientId || '', clientSecret: '', redirectUri: google?.redirectUri || suggestedCallback }), [google?.clientId, google?.redirectUri, suggestedCallback]);
+  useEffect(() => {
+    if (google?.connected) setTargets({ drive: google.grants.drive, youtube: google.grants.youtube });
+  }, [google?.connected, google?.grants.drive, google?.grants.youtube]);
+  const field = (name, value) => setFields((previous) => ({ ...previous, [name]: value }));
+  const selected = Object.keys(googleDestinations).filter((target) => targets[target]);
+  async function run(action) {
+    setError(''); setBusy(action);
+    try {
+      if (action === 'connect') {
+        const { url } = await api('/google/connect', { method: 'POST', body: { targets: selected } });
+        window.location.assign(url);
+      } else if (action === 'save') {
+        await api('/google/config', { method: 'PUT', body: fields });
+        field('clientSecret', ''); await refresh(); notify('Google OAuth settings saved.');
+      } else {
+        await api('/google/disconnect', { method: 'POST' });
+        setDisconnect(false); await refresh(); notify('Google account disconnected.');
+      }
+    } catch (err) { setError(err.message); }
+    finally { setBusy(''); }
+  }
+  return <section className="panel service-panel integration-panel" aria-label="Google connections">
+    <PanelHeading icon={Cloud} title="Google" description="One sign-in for Drive exports and private YouTube uploads."><ConnectionBadge online={google?.connected}/></PanelHeading>
+    <fieldset className="google-destinations">
+      <legend>Permissions to request</legend>
+      {Object.entries(googleDestinations).map(([target, { icon: Icon, label, detail }]) => <label className="google-destination" key={target}>
+        <input type="checkbox" checked={targets[target]} onChange={(event) => setTargets((previous) => ({ ...previous, [target]: event.target.checked }))}/><Icon size={18}/><div><strong>{label}</strong><span>{detail}</span>{google?.connected && <small>{google.grants[target] ? 'Granted' : 'Not granted'}</small>}</div>
+      </label>)}
+    </fieldset>
+    <div className="connection-row"><div><strong>{google?.account?.name || 'Google account'}</strong><p>{google?.connected ? 'Reconnect to change the requested permissions or switch accounts.' : google?.configured ? 'Choose one or both permissions, then sign in.' : 'Save a Google OAuth web client below to sign in.'}</p></div><div className="connection-actions">
+      {google?.connected && <Button icon={Unplug} disabled={Boolean(busy)} onClick={() => { setError(''); setDisconnect(true); }}>Disconnect Google</Button>}
+      <Button icon={Link2} tone={google?.connected ? 'neutral' : 'primary'} busy={busy === 'connect'} disabled={!google?.configured || !selected.length || Boolean(busy && busy !== 'connect')} onClick={() => run('connect')}>{google?.connected ? 'Reconnect' : 'Connect Google'}</Button>
+    </div></div>
+    {google?.managedByEnv ? <p className="privacy-note"><LockKeyhole size={16}/> This app is configured with server environment variables.</p> : <form className="modal-form integration-form" onSubmit={(event) => { event.preventDefault(); run('save'); }}>
+      <h3>Google OAuth web client</h3>
+      <div className="form-pair"><Field label="Google client ID"><input required value={fields.clientId} onChange={(event) => field('clientId', event.target.value)} maxLength={300} placeholder="Client ID from Google Cloud" autoComplete="off"/></Field><Field label="Google client secret"><input type="password" required={!google?.configured} value={fields.clientSecret} onChange={(event) => field('clientSecret', event.target.value)} maxLength={500} placeholder={google?.configured ? 'Leave blank to keep saved secret' : 'Client secret from Google Cloud'} autoComplete="new-password"/></Field></div>
+      <Field label="Google OAuth redirect URL" hint="Register this exact URL. Use localhost on your laptop or HTTPS on your VPS."><input type="url" required value={fields.redirectUri} onChange={(event) => field('redirectUri', event.target.value)} maxLength={500}/></Field>
+      <div className="integration-save"><Button icon={Check} type="submit" busy={busy === 'save'} disabled={Boolean(busy && busy !== 'save')}>Save Google configuration</Button></div>
+    </form>}
+    {error && !disconnect && <Banner>{error}</Banner>}
+    <details className="connection-help"><summary>Set up Google access</summary><ol>
+      <li>In <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer">Google Cloud Console <ArrowUpRight size={13}/></a>, enable the Drive API, YouTube Data API v3, or both.</li>
+      <li>Set up the OAuth consent screen and a Web application client. Add yourself as a test user if required and register the exact callback above.</li>
+      <li>Save the credentials here and connect. On a finished project, use <strong>Send to…</strong> to preview and approve the upload. Google account, project and API limits apply.</li>
+    </ol><p>Drive access is limited to app-created or app-opened files. YouTube sign-in is not required to clip public sources.</p></details>
+    {disconnect && <Confirm title="Disconnect Google?" message="This removes the saved Google tokens from Clipforge. An upload already in progress may finish. Uploaded files and videos stay in your account. Manage access in your Google account if you also want to revoke the grant." label="Disconnect Google" onClose={() => setDisconnect(false)} onConfirm={() => run('disconnect')} busy={busy === 'disconnect'} error={error}/>}
+  </section>;
 }
 
 export function Integrations({ workspace, refresh, notify, notice }) {
@@ -115,11 +174,13 @@ export function Integrations({ workspace, refresh, notify, notice }) {
     } catch (err) { setError(err.message); }
     finally { setBusy(''); }
   }
+  const connectedNotice = ['Google connected.', 'TikTok connected.'].includes(notice);
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / CONNECTIONS" title="Integrations" subtitle="Connect services to your self-hosted workspace."/>
-    {notice && <Banner tone={notice === 'TikTok connected.' ? 'success' : 'error'} icon={notice === 'TikTok connected.' ? Check : CircleHelp}>{notice}</Banner>}
-    <section className="panel service-panel integration-panel">
-      <PanelHeading icon={TikTokIcon} title="TikTok" description="Send approved video drafts to the TikTok inbox."><span className={`badge ${tiktok?.connected ? 'badge-green' : ''}`}><i/>{tiktok?.connected ? 'Connected' : 'Not connected'}</span></PanelHeading>
+    <PageHeading label="WORKSPACE / CONNECTIONS" title="Integrations" subtitle="Manage Google Drive, YouTube and TikTok accounts here. Export presets work without signing in."/>
+    {notice && <Banner tone={connectedNotice ? 'success' : 'error'} icon={connectedNotice ? Check : CircleHelp}>{notice}</Banner>}
+    <GoogleConnection google={workspace?.google} refresh={refresh} notify={notify}/>
+    <section className="panel service-panel integration-panel" aria-label="TikTok connection">
+      <PanelHeading icon={TikTokIcon} title="TikTok" description="Send approved video drafts to the TikTok inbox."><ConnectionBadge online={tiktok?.connected}/></PanelHeading>
       {tiktok?.connected ? <div className="connection-row"><div><strong>{tiktok.account.name}</strong><p>To publish a draft, open its notification in TikTok.</p></div><Button icon={Unplug} onClick={() => { setError(''); setDisconnect(true); }}>Disconnect</Button></div> : <div className="connection-row"><div><strong>Creator account</strong><p>{tiktok?.configured ? 'Authorize the account that should receive drafts.' : 'Save your developer app settings to connect an account.'}</p></div><Button icon={Link2} tone="primary" busy={busy === 'connect'} disabled={!tiktok?.configured} onClick={() => run('connect')}>Connect account</Button></div>}
       {tiktok?.managedByEnv ? <p className="privacy-note"><LockKeyhole size={16}/> This app is configured with server environment variables.</p> : <form className="modal-form integration-form" onSubmit={(event) => { event.preventDefault(); run('save'); }}>
         <h3>Developer app settings</h3>
@@ -148,7 +209,7 @@ export function Setup({ workspace, refresh, notify }) {
   return <div className="view-enter">
     <PageHeading label="SELF-HOSTED WORKSPACE" title="Setup guide" subtitle="Run Clipforge on your computer or bring it to your own server."/>
     <div className="setup-grid"><section className="panel service-panel"><PanelHeading icon={Terminal} title="Run locally" description="Node.js 22+, Python 3.10+ and a terminal."/><p className="setup-copy">From the repository folder, install the website and media tools. Then open <code>http://localhost:5173</code>.</p><CommandBlock notify={notify}>{'npm ci\nnpm run setup\nnpm run dev'}</CommandBlock><p className="setup-copy">The first local transcription downloads the Whisper model. To fetch it ahead of time, run <code>npm run setup -- --download-model</code>.</p></section>
-    <section className="panel service-panel"><PanelHeading icon={Server} title="Run on a VPS" description="Use Docker Compose or a Node process."/><p className="setup-copy">Copy the example environment file and set a strong <code>AUTH_PASSWORD</code> before starting.</p><CommandBlock notify={notify}>{'cp .env.example .env\n# Edit .env to set AUTH_PASSWORD\ndocker compose up -d --build'}</CommandBlock><p className="setup-copy">Proxy the app through HTTPS and keep port 5173 private. See the repository README for example deployment and data backup instructions.</p></section></div>
+    <section className="panel service-panel"><PanelHeading icon={Server} title="Run on a VPS" description="Run as a Node service. No Docker required."/><p className="setup-copy">Copy the example environment file and set a strong <code>AUTH_PASSWORD</code> before starting.</p><CommandBlock notify={notify}>{'cp .env.example .env\n# Edit .env to set AUTH_PASSWORD\nnpm ci\nnpm run setup\nnpm run build\nnpm start'}</CommandBlock><p className="setup-copy">Proxy the app through HTTPS and keep port 5173 private. See the repository README for example deployment and data backup instructions.</p></section></div>
     <section className="panel service-panel tool-panel"><PanelHeading icon={Download} title="System checks" description="Tools detected on this server."><Button icon={RefreshCw} busy={busy} onClick={check}>Recheck</Button></PanelHeading><div className="tool-list">{[['FFmpeg', online?.ffmpeg, 'Reads and renders media'], ['yt-dlp', online?.ytDlp, 'Imports authorized YouTube sources'], ['Burned captions', online?.subtitles, 'FFmpeg libass subtitle filter'], ['Whisper', online?.whisper, 'Local speech recognition package']].map(([title, ready, detail]) => <div key={title}><div><strong>{title}</strong><p>{detail}</p></div><span className={`badge ${ready ? 'badge-green' : ''}`}><i/>{ready ? 'Installed' : ready === false ? 'Not found' : 'Unknown'}</span></div>)}</div></section>
   </div>;
 }

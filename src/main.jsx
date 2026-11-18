@@ -13,6 +13,7 @@ import Studio, { initialFields } from './studio.jsx';
 import { Library, Project } from './projects.jsx';
 import { Integrations, Providers, Setup } from './settings.jsx';
 import { ACTIVE, api } from './ui.jsx';
+import { clipUploading } from './delivery.jsx';
 
 const navigation = [
   { id: 'studio', label: 'Clip Studio', icon: Clapperboard }, { id: 'library', label: 'Clip Library', icon: FolderOpen },
@@ -75,7 +76,7 @@ function App() {
         setProjectsLoaded(true);
         setProjectsError(error.message);
       }
-      if (!ctrl.signal.aborted) timer = setTimeout(load, currentProjects.current.some((p) => ACTIVE.has(p.status) || p.clips.some((c) => ['queued', 'uploading', 'processing'].includes(c.tiktok?.state))) ? 1100 : 5000);
+      if (!ctrl.signal.aborted) timer = setTimeout(load, currentProjects.current.some((p) => ACTIVE.has(p.status) || p.clips.some(clipUploading)) ? 1100 : 5000);
     }
     load();
     return () => { ctrl.abort(); clearTimeout(timer); };

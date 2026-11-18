@@ -16,7 +16,8 @@ def main():
         cpu_threads=threads,
         download_root=os.getenv("WHISPER_CACHE") or None,
     )
-    segments, _ = model.transcribe(sys.argv[1], vad_filter=True, word_timestamps=True, beam_size=3)
+    task = "translate" if "--translate" in sys.argv[2:] else "transcribe"
+    segments, info = model.transcribe(sys.argv[1], task=task, vad_filter=True, word_timestamps=True, beam_size=3)
     cues = []
     for segment in segments:
         group = []
@@ -32,7 +33,7 @@ def main():
             cues.append(pack(group))
         if not segment.words and segment.text.strip():
             cues.append({"start": segment.start, "end": segment.end, "text": segment.text.strip()})
-    print(json.dumps(cues, ensure_ascii=True))
+    print(json.dumps({"cues": cues, "language": "en" if task == "translate" else info.language}, ensure_ascii=True))
 
 
 def pack(words):

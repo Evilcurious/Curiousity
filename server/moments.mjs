@@ -4,7 +4,8 @@ const overlap = (a, b) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start,
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
 export function normalizeCues(raw) {
-  return raw.flatMap((item) => {
+  return (Array.isArray(raw) ? raw : []).flatMap((item) => {
+    if (!item) return [];
     const start = Number(item.start), end = Number(item.end), text = clean(item.text);
     return Number.isFinite(start) && Number.isFinite(end) && end > Math.max(0, start) && text
       ? [{ start: Math.max(0, start), end, text: text.slice(0, 300) }] : [];
@@ -115,16 +116,17 @@ function timestamp(total, ass = false) {
 }
 export const timeLabel = (seconds) => `${pad(Math.floor(seconds / 60))}:${pad(Math.floor(seconds) % 60)}`;
 export const makeSrt = (rows) => rows.map((cue, index) => `${index + 1}\n${timestamp(cue.start)} --> ${timestamp(cue.end)}\n${cue.text}\n`).join('\n');
-export const makeAss = (rows) => `[Script Info]
+const captionFont = new Map([['ar', 'Noto Sans Arabic'], ['ur', 'Noto Sans Arabic'], ['hi', 'Noto Sans Devanagari'], ['bn', 'Noto Sans Bengali']]);
+export const makeAss = (rows, { width = 720, height = 1280 } = {}, language) => `[Script Info]
 ScriptType: v4.00+
-PlayResX: 720
-PlayResY: 1280
+PlayResX: ${width}
+PlayResY: ${height}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,41,&H00F7FFF5,&H0060FABF,&H000B100A,&H76000000,-1,0,0,0,100,100,0,0,1,3.5,1,2,56,80,224,1
+Style: Default,${captionFont.get(language) || 'DejaVu Sans'},${Math.max(22, Math.round(Math.min(width, height) * .057))},&H00F7FFF5,&H0060FABF,&H000B100A,&H76000000,-1,0,0,0,100,100,0,0,1,3.5,1,2,${Math.round(width * .08)},${Math.round(width * .08)},${Math.round(height * (height > width ? .175 : .105))},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

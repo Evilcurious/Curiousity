@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 
 if (process.platform === 'win32') {
-  console.error('Use WSL or Docker Desktop for the media tools on Windows.');
+  console.error('Run these commands inside a WSL Ubuntu terminal on Windows. Docker is not required.');
   process.exit(1);
 }
 const folder = resolve('.venv');
