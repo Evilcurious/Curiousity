@@ -233,6 +233,19 @@ Disconnecting removes local tokens. To revoke the app's permission completely, a
 
 Curiousity uses TikTok's [official inbox upload API](https://developers.tiktok.com/doc/content-posting-api-reference-upload-video/). It does not automate public posts or use a TikTok password. Test streaming and account connections on the eventual host with your own authorized sources and credentials.
 
+## Public legal pages
+
+[Terms of Service](https://ai.devzard.online/terms) and [Privacy Policy](https://ai.devzard.online/privacy) are standalone HTML pages. They do not require a login or JavaScript. The documents live in `public/terms/index.html` and `public/privacy/index.html` and are included in the web build and Docker image. Sign-in, sign-up, and the workspace navigation link to them.
+
+After building and restarting the deployed app, verify that the public URLs serve the actual documents, not the app shell or a sign-in redirect:
+
+```sh
+curl -fsS https://ai.devzard.online/terms | grep -F '<h1>Terms of Service</h1>'
+curl -fsS https://ai.devzard.online/privacy | grep -F '<h1>Privacy Policy</h1>'
+```
+
+If you deploy on another domain or change how the service handles data, review the domain, operator contact, and policy text in both documents before publishing them. Forward `/terms` and `/privacy` unchanged if your proxy has custom routing.
+
 ## Tests
 
 ```sh

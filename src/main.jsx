@@ -19,6 +19,7 @@ import { AccountSettings, AdminSettings, Appearance, SettingsHome, SettingsTabs,
 import { McpSettings } from './mcp.jsx';
 import { applyBrand, Wordmark } from './brand.jsx';
 import Access from './auth.jsx';
+import LegalLinks from './legal-links.jsx';
 import { TemporaryPasswordSettings } from './password-settings.jsx';
 import CaptionsPage from './captions-page.jsx';
 import ChatPage from './chat-page.jsx';
@@ -186,7 +187,10 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         <div className="nav-group"><p className="nav-label">WORKSPACE</p>{navigation.map(navItem)}</div>
         <div className="nav-group resources"><p className="nav-label">RESOURCES</p>{navItem({ id: 'setup', label: 'Setup Guide', icon: BookOpen })}</div>
       </nav>
-      <div className="sidebar-bottom"><a className="instance account-chip" href="#/settings/account" onClick={() => setMenu(false)} title={user.email}><span className="instance-icon">{user.email[0].toUpperCase()}</span><div><strong>{user.email}</strong><span>{user.role === 'admin' ? <><Shield size={11}/> Administrator</> : user.premium ? <><Crown size={11}/> Premium</> : 'Member account'}</span></div><ChevronRight size={14}/></a></div>
+      <div className="sidebar-bottom">
+        <a className="instance account-chip" href="#/settings/account" onClick={() => setMenu(false)} title={user.email}><span className="instance-icon">{user.email[0].toUpperCase()}</span><div><strong>{user.email}</strong><span>{user.role === 'admin' ? <><Shield size={11}/> Administrator</> : user.premium ? <><Crown size={11}/> Premium</> : 'Member account'}</span></div><ChevronRight size={14}/></a>
+        <LegalLinks/>
+      </div>
     </aside>
     <div className="main-shell">
       <header className="topbar"><div className="topbar-inner">

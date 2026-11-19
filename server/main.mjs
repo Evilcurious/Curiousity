@@ -707,6 +707,8 @@ for (const site of sites) {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'No Curiousity API route matches this path and HTTP method.', code: 'API_ROUTE_NOT_FOUND' }));
 
 const watcher = dev ? await (await import('../scripts/build.mjs')).buildWeb({ watch: true }) : null;
+// Serve complete public documents at the clean paths, before the SPA fallback.
+for (const page of ['terms', 'privacy']) app.get(`/${page}`, (_req, res) => res.sendFile(join(ROOT, 'public', page, 'index.html')));
 app.use(express.static(webRoot, { dotfiles: 'deny' }));
 app.get('/{*path}', (_req, res) => res.sendFile(join(webRoot, 'index.html')));
 app.use((error, _req, res, next) => {

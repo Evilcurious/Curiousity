@@ -3,6 +3,7 @@ import { ArrowRight, Check, Clapperboard, LockKeyhole, ScanLine, Sparkles } from
 import { ActionLink, api, Banner, Button } from './ui.jsx';
 import { Field, PasswordInput } from './forms.jsx';
 import { Logo } from './brand.jsx';
+import LegalLinks from './legal-links.jsx';
 
 const signupRoute = () => /^#\/?signup\/?$/.test(window.location.hash);
 const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -67,11 +68,15 @@ export default function Access({ session, onSignedIn, startupError, notice, retr
             <Field label="Password" hint={join ? 'At least 10 characters. Use a unique password.' : undefined}><PasswordInput name="password" show={visible} onToggle={() => setVisible(!visible)} required autoComplete={join ? 'new-password' : 'current-password'} minLength={join ? 10 : undefined} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password"/></Field>
             {join && <Field label="Repeat password"><input type="password" name="confirmPassword" required autoComplete="new-password" minLength={10} maxLength={256} value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat your password"/></Field>}
             {error && <Banner>{error}</Banner>}
+            {join && <p className="access-legal-notice">By creating an account, you agree to the <a href="/terms">Terms of Service</a> and acknowledge the <a href="/privacy">Privacy Policy</a>.</p>}
             <Button type="submit" busy={busy} tone="primary" className="access-submit">{join ? 'Create account' : 'Sign in'}<ArrowRight size={17}/></Button>
           </form>
         </>}
       </div>
-      <footer className="access-footer"><LockKeyhole size={15}/> Your keys and connections stay in your account.</footer>
+      <footer className="access-footer">
+        <p><LockKeyhole size={15}/> Your keys and connections stay in your account.</p>
+        {(!join || insecure) && <LegalLinks/>}
+      </footer>
     </section>
   </main>;
 }
