@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0e100d" />
-    <meta name="description" content="How Curiousity handles account information, uploaded media, AI and search requests, and connected Google and social accounts." />
+    <meta name="description" content="How Curiousity handles account information, uploaded media, AI and search requests, and connected apps and delivery accounts." />
     <link rel="canonical" href="https://ai.devzard.online/privacy" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/legal.css" />
@@ -36,8 +36,8 @@
           <ol>
             <li><a href="#information">Information we handle</a></li>
             <li><a href="#use">How we use information</a></li>
-            <li><a href="#ai-search">AI, search, and MCP</a></li>
-            <li><a href="#google">Google Drive and YouTube</a></li>
+            <li><a href="#ai-search">AI, search, and connected apps</a></li>
+            <li><a href="#google">Legacy Google Drive and YouTube</a></li>
             <li><a href="#delivery">Other delivery services</a></li>
             <li><a href="#sharing">Sharing and retention</a></li>
             <li><a href="#cookies">Cookies and security</a></li>
@@ -52,7 +52,7 @@
             <ul>
               <li><strong>Account information:</strong> Your email address, account ID, salted password hash, account role, membership plan and expiration, usage counters and limits, settings, and session records. We do not store your password in plaintext.</li>
               <li><strong>Projects and media:</strong> Source links, uploaded or captured video, project settings, audio and caption data used for processing, and exports such as MP4s and subtitle files. Device caption projects keep the original video to allow re-styling until you delete the project.</li>
-              <li><strong>Connected services:</strong> Provider and integration settings, which may include endpoint addresses, model names, API credentials, account identifiers, permissions, and delivery status. Saved secrets and OAuth tokens stored by Curiousity are encrypted at rest.</li>
+              <li><strong>Connected services:</strong> Provider settings and integration records, which may include endpoint addresses, model names, account identifiers, labels, permissions, and delivery status. The Composio project key and legacy tokens stored by Curiousity are encrypted at rest. Composio stores and refreshes credentials for new app connections.</li>
               <li><strong>Technical information:</strong> The workspace processes request information such as IP addresses to operate the service and limit abuse. We keep the IP address and time of the last successful sign-in with the account for the administrator to view, replacing it at the next sign-in. The host or reverse proxy may keep access or error logs.</li>
             </ul>
           </section>
@@ -61,29 +61,29 @@
             <p>We use information to authenticate you, manage access, run the features you request, render and store your work, maintain service reliability, and prevent abuse. This includes retrieving YouTube media or captions when you provide a source and sending data to a provider when a feature you choose requires it. We do not sell personal information or use it for advertising in Curiousity.</p>
           </section>
           <section id="ai-search">
-            <h2>3. AI, search, and MCP</h2>
+            <h2>3. AI, search, and connected apps</h2>
             <ul>
               <li><strong>AI models:</strong> A chosen provider receives the data needed for the feature you run. Chat sends recent messages to your selected model and keeps the conversation in the current tab, not in a server-side conversation history. Remote transcription sends audio; optional ranking or translation sends relevant excerpts or captions. Local processing does not send those inputs to a remote AI provider.</li>
               <li><strong>Live Monitor:</strong> When public chat is available, Curiousity reads it to measure activity. The raw feed can be buffered temporarily while the monitor is running and is removed when the collector stops. The project can retain aggregate counts, not chat authors or message text. Auto sends activity counts, approximate timing, and any useful transcript excerpt to the model you choose.</li>
               <li><strong>Reach and Finder:</strong> The search query and filters, including any location you enter, go to the configured search provider, such as Exa or the YouTube Data API. With AI review on, the selected model also receives the search criteria and brief public evidence. It does not receive your Chat history or projects. The server does not retain search history or generated workbooks.</li>
-              <li><strong>MCP connections:</strong> When you approve a tool call, the chosen server receives its arguments and the credential needed to authenticate you. Avoid sending sensitive information to a provider you do not trust. Connected providers handle received data under their own policies.</li>
+              <li><strong>Composio app connections:</strong> When you connect an app, Composio receives a stable workspace-scoped account identifier and manages authorization with that app. We store the verified connection ID, app name, and optional label, not the app’s OAuth tokens. In Chat’s Apps tab, part of the latest request goes to Composio to match tools. The selected model also receives recent app-chat messages and descriptions of matching tools. If you approve an action, Composio and the destination receive the reviewed inputs, and a limited, redacted result goes to the selected model. Curiousity does not store the app conversation or result on disk. These providers may retain received data under their own policies. Disconnecting asks Composio to revoke credentials; you can also revoke them in the destination app.</li>
             </ul>
           </section>
           <section id="google">
-            <h2>4. Google Drive and YouTube</h2>
-            <p>When you choose <strong>Connect Google</strong>, OAuth shares basic profile information. Curiousity stores the connected account’s ID and display name, the permissions you grant, and encrypted access and refresh tokens. We use this information to identify your connection and carry out the uploads you approve.</p>
+            <h2>4. Legacy Google Drive and YouTube</h2>
+            <p>For Google accounts linked directly before Composio was introduced, Curiousity retains the connected account’s ID and display name, permissions, and encrypted access and refresh tokens. We use this information to identify the account and perform the legacy clip uploads you approve. The next permissions apply only to this older integration.</p>
             <ul>
               <li><strong>Google Drive (<code>drive.file</code>):</strong> Saves the selected MP4 and its metadata to your Drive. This permission is limited to files created by or explicitly opened with the app. Curiousity does not browse your Drive or change file sharing.</li>
               <li><strong>YouTube (<code>youtube.upload</code>):</strong> Sends the clip and reviewed metadata to your authorized channel as a private video. Curiousity stores the returned delivery status and link. No access to your Gmail is requested.</li>
             </ul>
             <p>Curiousity’s use and transfer of information received from Google APIs is governed by the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements. We do not sell Google account data, use it for advertising or AI training, or send your OAuth credentials to AI providers. See the <a href="https://policies.google.com/privacy">Google Privacy Policy</a> for Google’s practices.</p>
-            <p><strong>Disconnect Google</strong> in Curiousity to remove the saved account profile and tokens. You can also revoke access in your <a href="https://myaccount.google.com/permissions">Google Account permissions</a>. Delivery records remain with the local project until you delete it. Files and videos already uploaded stay at their destination until you remove them there.</p>
+            <p>Remove the old connection under <strong>Previously saved integrations</strong> to delete the saved account profile and tokens. You can also revoke access in your <a href="https://myaccount.google.com/permissions">Google Account permissions</a>. Delivery records remain with the local project until you delete it. Files and videos already uploaded stay at their destination until you remove them there.</p>
           </section>
           <section id="delivery">
             <h2>5. Other delivery services</h2>
-            <p><strong>TikTok:</strong> If you authorize TikTok, Curiousity receives each connected account’s identifier and display name, and stores encrypted tokens. You choose the receiving account when reviewing a draft. Confirmed uploads send selected media to your TikTok inbox so you can finish publishing there. Curiousity retains delivery status. Disconnect a creator to remove the local tokens for that account.</p>
+            <p><strong>Legacy TikTok:</strong> For creators previously linked directly, Curiousity retains the connected account’s identifier and display name, and stores encrypted tokens. You choose the receiving account when reviewing a draft. Confirmed uploads send selected media to your TikTok inbox so you can finish publishing there. Curiousity retains delivery status. Disconnect a creator to remove the local tokens for that account.</p>
             <p><strong>WhatsApp:</strong> If you select a paid plan, its link opens WhatsApp with the plan name in a suggested message. Curiousity does not send your account details or collect payment in the app. Messages or payment details you share there are handled outside Curiousity under the provider’s and recipient’s practices.</p>
-            <p><strong>Buffer:</strong> When you approve a draft, Buffer receives the draft text, destination and media details, and fetches the attached media from the supplied link. Anyone with a Curiousity Buffer media link can download that clip while the link is valid, for up to three days or until the project is deleted.</p>
+            <p><strong>Legacy Buffer:</strong> When you approve a draft, Buffer receives the draft text, destination and media details, and fetches the attached media from the supplied link. Anyone with a Curiousity Buffer media link can download that clip while the link is valid, for up to three days or until the project is deleted.</p>
           </section>
           <section id="sharing">
             <h2>6. Sharing and retention</h2>

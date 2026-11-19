@@ -128,7 +128,7 @@ export function createGoogle(store, { useEnv = true, background = true } = {}) {
   function describe() {
     const configured = envConfig || state.config;
     const account = currentAccount();
-    return { configured: Boolean(configured), managedByEnv: Boolean(envConfig), clientId: configured?.clientId || '', redirectUri: configured?.redirectUri || '', connected: Boolean(account),
+    return { configured: Boolean(configured), managedByEnv: Boolean(envConfig), hasSavedAccount: Boolean(state.account), clientId: configured?.clientId || '', redirectUri: configured?.redirectUri || '', connected: Boolean(account),
       account: account ? { id: account.id, name: account.name } : null, grants: Object.fromEntries(Object.keys(googleScopes).map((target) => [target, Boolean(account?.targets.includes(target))])) };
   }
   function configure(body) {

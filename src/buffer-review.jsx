@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, Check, Link2, RefreshCw, ShieldCheck } from 'lucide-react';
-import { ActionLink, api, Banner, Button, Modal } from './ui.jsx';
+import { ArrowUpRight, Layers, Check, RefreshCw, ShieldCheck } from 'lucide-react';
+import { api, Banner, Button, Modal } from './ui.jsx';
 import { clipRatio } from './delivery.jsx';
-import { BufferIcon } from './mcp.jsx';
 import { Field, Select } from './forms.jsx';
 
 const serviceLabels = { instagram: 'Instagram Reel', facebook: 'Facebook', tiktok: 'TikTok', youtube: 'YouTube', linkedin: 'LinkedIn', threads: 'Threads', bluesky: 'Bluesky', twitter: 'X' };
 const dashboard = 'https://publish.buffer.com/';
+
+export function BufferIcon({ size = 18, ...props }) { return <Layers size={size} strokeWidth={1.8} {...props}/>; }
 
 export function BufferStatus({ draft }) {
   if (!draft) return null;
@@ -54,7 +55,7 @@ export function BufferReview({ job, clip, frame, profiles, canHost, onClose, onS
     } catch (err) { setError(err.message); setConsent(false); }
     finally { setSending(false); }
   }
-  if (!profiles.length) return <Modal title="Connect Buffer first" subtitle="Add your personal Buffer API key under Settings → MCP servers. You can then select a destination and review a draft." onClose={onClose}><div className="modal-actions"><Button onClick={onClose}>Cancel</Button><ActionLink href="#/settings/mcp?preset=buffer" icon={Link2} tone="primary">Connect Buffer</ActionLink></div></Modal>;
+  if (!profiles.length) return <Modal title="Buffer connection unavailable" subtitle="This legacy destination was removed. Download your clip to upload it in Buffer." onClose={onClose}><div className="modal-actions"><Button onClick={onClose}>Close</Button></div></Modal>
   return <Modal wide title="Review Buffer draft" subtitle="Review the clip, account and post text before sending. This creates a draft, not a scheduled or published post." onClose={onClose}>
     <form className="modal-form" onSubmit={submit}>
       <div className="google-review-layout buffer-review">

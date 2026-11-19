@@ -76,7 +76,7 @@ test('API saves repeated provider profiles, keeps distinct keys, and separates r
 test('engine validates and authenticates writes, renders MP4/SRT, and handles replay and live-capture fixtures', { timeout: 120_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cf-engine-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const app = await boot({ DATA_DIR: join(root, '.hidden-workspace') }, t);
+  const app = await boot({ DATA_DIR: join(root, '.hidden-workspace'), ENABLE_LEGACY_INTEGRATION_API: 'true' }, t);
   assert.equal((await fetch(`${app.url}/api/workspace`)).status, 401);
   const domain = await app.request('/projects', { method: 'POST', headers: { Origin: 'https://unrelated.example', 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(domain.status, 403);

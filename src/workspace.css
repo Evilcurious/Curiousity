@@ -103,12 +103,6 @@
 .logo-controls .connection-actions { margin-left: auto; }
 .branding-panel > h3 { font: 700 19px/1.2 var(--display); margin: 0 0 9px; }
 .profile-actions [aria-pressed='true'] { color: var(--accent-text); border-color: var(--accent-line); background: var(--green-wash); }
-.mcp-feature { background: linear-gradient(100deg, var(--green-wash), var(--panel) 70%); }
-.mcp-description { color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.mcp-schema, .mcp-result { min-width: 0; border-radius: 8px; padding: 9px 10px; border: 1px solid var(--line-strong); color: var(--muted); background: var(--field); font-size: 12px; }
-.mcp-schema summary { cursor: pointer; }
-.mcp-schema pre, .mcp-result pre, .form-field .mcp-arguments { font: 500 11px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.mcp-schema pre, .mcp-result pre { margin: 8px 0 0; max-height: 260px; overflow: auto; }
 
 /* Shared exports and draft reviews */
 .library-tabs { margin-bottom: 15px; }
@@ -147,15 +141,11 @@
   .settings-card { padding: 12px; }
   .settings-card h2 { font-size: 20px; }
   .library-share-bar .button { margin-left: 0; }
-  .mcp-row .profile-actions { flex-wrap: wrap; }
 }
 @media (max-width: 386px) {
   .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .theme-swatch { height: 63px; grid-template-rows: 16px 1fr; padding-block: 7px; }
   .settings-card h2 { font-size: 17px; }
   .settings-card p, .settings-card > span { overflow-wrap: anywhere; }
-  .mcp-feature { flex-wrap: wrap; }
-  .mcp-feature > div { flex: 1; }
-  .mcp-feature .button { margin-left: 0; }
   .shared-grid { grid-template-columns: 1fr; }
 }

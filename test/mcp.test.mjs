@@ -66,7 +66,7 @@ test('Streamable HTTP discovery, approved tool calls, and Buffer draft-only deli
   store.save();
   const trace = join(root, 'trace.jsonl');
   await writeFile(trace, '');
-  const engine = await startEngine(t, { imports: ['test/fixtures/mcp-network.mjs'], env: { DATA_DIR: root, ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: exampleAdmin.password, PUBLIC_ORIGIN: requestOrigin, FIXTURE_MCP_TRACE: trace } });
+  const engine = await startEngine(t, { imports: ['test/fixtures/mcp-network.mjs'], env: { DATA_DIR: root, ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: exampleAdmin.password, PUBLIC_ORIGIN: requestOrigin, FIXTURE_MCP_TRACE: trace, ENABLE_LEGACY_INTEGRATION_API: 'true' } });
   const admin = engine.agent(), member = engine.agent();
   assert.equal((await admin.signin()).status, 200);
   assert.equal((await member.signup('second@example.test')).status, 201);

@@ -28,7 +28,7 @@ test('members configure and discover personal models and MCP, and chat cannot to
   t.after(() => rm(root, { recursive: true, force: true }));
   const trace = join(root, 'provider.jsonl'), mcpTrace = join(root, 'mcp.jsonl');
   await Promise.all([writeFile(trace, ''), writeFile(mcpTrace, '')]);
-  const env = { DATA_DIR: root, FIXTURE_PROVIDER_TRACE: trace, FIXTURE_MCP_TRACE: mcpTrace };
+  const env = { DATA_DIR: root, FIXTURE_PROVIDER_TRACE: trace, FIXTURE_MCP_TRACE: mcpTrace, ENABLE_LEGACY_INTEGRATION_API: 'true' };
   const imports = ['test/fixtures/providers-network.mjs', 'test/fixtures/mcp-network.mjs'];
   const original = await startEngine(t, { env });
   await json(await original.agent().signup('member@example.test'), 201);

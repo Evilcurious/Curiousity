@@ -10,6 +10,8 @@ import { processProject } from './media.mjs';
 import { captionFiles, captionInputPath, captionJobPublic, isCaptionJob, processCaptionJob } from './device-captions.mjs';
 import { receiveVideo, responseSignal } from './caption-upload.mjs';
 import { chatInput } from './chat.mjs';
+import { createComposio } from './composio.mjs';
+import { createAppChat } from './app-chat.mjs';
 import { discover, discoveryEnabled, discoveryInput } from './discovery.mjs';
 import { finderWorkbook } from './finder-xlsx.mjs';
 import { HttpError, captionStyleInput, jobOptions, maxClips, liveLimits, maxLiveMinutes, text } from './validation.mjs';
@@ -30,6 +32,8 @@ import { liveModes } from './live-monitor.mjs';
 const dev = process.argv.includes('--dev');
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 5173);
+// Transitional API only. The web UI offers no new legacy connection setup.
+const legacySetup = process.env.ENABLE_LEGACY_INTEGRATION_API === 'true';
 const loopbackHost = /^(?:127\.0\.0\.1|\[::1\]|localhost)(?::\d{1,5})?$/i;
 const isLoopback = (address) => ipaddr.isValid(address || '') && ipaddr.process(address).range() === 'loopback';
 const proxyMode = process.env.TRUST_PROXY?.trim().toLowerCase() || '0';
@@ -67,6 +71,8 @@ function passwordTransport(req) {
   return local ? 'local' : 'blocked';
 }
 const auth = createAuth(store, { secure, embedded: preview });
+const composio = createComposio(store, { publicOrigin });
+const appChat = createAppChat(store, composio);
 const networkLimit = limiter(60_000);
 const services = new Map();
 const deleting = new Set(), copying = new Set(), chatting = new Set();
@@ -256,7 +262,7 @@ function allowPassword(req) {
   throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
 // Route support only; media tools and a configured chat model are checked separately.
-const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true });
+const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true, composioApps: true });
 app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req), apiFeatures }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
@@ -282,6 +288,23 @@ async function oauthCallback(service, req, res) {
 }
 app.get('/api/google/callback', (req, res) => oauthCallback('google', req, res));
 app.get('/api/tiktok/callback', (req, res) => oauthCallback('tiktok', req, res));
+function onPublicOrigin(req) {
+  if (!publicOrigin || !secure(req)) return false;
+  const host = new URL(publicOrigin).host;
+  return req.get('host')?.toLowerCase() === host || ((proxyTrusted(req) || preview(req)) && req.get('x-forwarded-host')?.trim().toLowerCase() === host);
+}
+app.get('/api/composio/callback', async (req, res) => {
+  if (req.method !== 'GET') return res.status(405).set('Allow', 'GET').end();
+  const account = auth.identify(req);
+  let returned = { from: 'integrations', result: 'signin' };
+  if (account && !mustChangePassword(account) && onPublicOrigin(req)) {
+    returned = await composio.complete(account, auth.sessionKey(req), req.query, () => {
+      if (auth.identify(req) !== account || mustChangePassword(account)) throw new HttpError(401, 'Sign in again to finish connecting.');
+    });
+  }
+  const target = returned.from === 'chat' ? '/#/chat?apps=1&' : '/#/settings/integrations?';
+  res.redirect(303, `${target}composio=${returned.result}`);
+});
 app.use('/api', (req, _res, next) => {
   const account = auth.identify(req);
   if (!account) return next(new HttpError(401, 'Sign in to your Curiousity account.'));
@@ -304,7 +327,7 @@ app.get('/api/workspace', async (req, res) => {
   const { google, tiktok } = connections(req.account);
   res.json({ online: true, tools: await toolsStatus(), user: publicAccount(req.account), branding: publicBrand(store),
     providers: providers.map(publicProviderFor), sharedProviders: sharedProviders(store, req.account).map(sharedProviderCard),
-    activeProviderId: req.scoped.chatProfile(activeProviderId) ? activeProviderId : null, captions, mcps: mcps.map(publicMcp),
+    activeProviderId: req.scoped.chatProfile(activeProviderId) ? activeProviderId : null, captions, mcps: mcps.map(publicMcp), composio: composio.status(),
     tiktok: tiktok.describe(), google: google.describe(), discoveryEnabled, bufferCanHost: Boolean(publicOrigin), maxClips, liveLimits, maxLiveMinutes, replayWaitMinutes, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
 });
 app.put('/api/account/theme', () => { throw new HttpError(403, 'The workspace theme is set by your administrator.'); });
@@ -352,8 +375,33 @@ app.put('/api/admin/providers/:id/share', (req, res) => {
 });
 
 function ensureSession(req) {
-  if (auth.identify(req) !== req.account) throw new HttpError(401, 'Your session changed. Sign in again to continue.');
+  if (auth.identify(req) !== req.account || mustChangePassword(req.account)) throw new HttpError(401, 'Your session changed. Sign in again to continue.');
 }
+app.get('/api/admin/composio', (_req, res) => res.json(composio.adminStatus()));
+app.put('/api/admin/composio', async (req, res) => {
+  allowPassword(req);
+  networkLimit(`composio-config:${req.account.id}`, 8);
+  res.json(await composio.configure(req.body, () => ensureSession(req)));
+});
+app.get('/api/composio/connections', async (req, res) => {
+  networkLimit(`composio-read:${req.account.id}`, 40);
+  res.json(await composio.connections(req.account, () => ensureSession(req)));
+});
+app.get('/api/composio/apps', async (req, res) => {
+  networkLimit(`composio-read:${req.account.id}`, 40);
+  res.json(await composio.apps(req.account, req.query, () => ensureSession(req)));
+});
+app.post('/api/composio/connect', async (req, res) => {
+  if (!onPublicOrigin(req)) throw new HttpError(409, 'Open Curiousity at its configured public HTTPS address to connect an app.');
+  networkLimit(`composio-connect:${req.account.id}`, 6);
+  res.json(await composio.begin(req.account, auth.sessionKey(req), req.body, () => ensureSession(req)));
+});
+app.delete('/api/composio/connections/:id', async (req, res) => {
+  networkLimit(`composio-connect:${req.account.id}`, 6);
+  await composio.disconnect(req.account, req.params.id, () => ensureSession(req));
+  res.status(204).end();
+});
+
 function checkQueue(account) {
   const active = store.state.jobs.filter((item) => item.ownerId && activeStatuses.has(item.status));
   if (active.length >= 10 || active.filter((item) => item.ownerId === account.id).length >= 2) throw new HttpError(429, 'The project queue is full. Wait for an active project to finish.');
@@ -673,22 +721,58 @@ for (const skill of ['reach', 'finder']) app.post(`/api/chat/${skill}`, async (r
   finally { request.release(); request.signal.removeEventListener('abort', releaseSearch); releaseSearch(); }
 });
 
-app.post('/api/chat', async (req, res) => {
-  const { providerId, messages } = chatInput(req.body);
+function chatProfile(req, providerId, exact = false) {
   const profile = req.scoped.chatProfile(providerId);
   if (!profile) throw new HttpError(404, 'This provider profile could not be found.');
-  if (req.body.revision !== undefined && (profile.revision || profile.id) !== req.body.revision) throw new HttpError(409, 'This AI profile changed. Refresh your workspace before sending any messages.');
+  if ((exact || req.body.revision !== undefined) && (profile.revision || profile.id) !== req.body.revision) throw new HttpError(409, 'This AI profile changed. Refresh your workspace before sending any messages.');
   if (!profile.model) throw new HttpError(400, 'Choose a chat model for this profile in Settings.');
+  return profile;
+}
+function chargeMessage(req, profile) {
+  if (!req.scoped.state.providers.includes(profile)) { reserveUsage(req.account, { message: true }); store.save(); }
+}
+async function chatRequest(req, res, fn) {
   if (chatting.has(req.account.id) || chatting.size >= 12) throw new HttpError(429, 'Chat is busy. Wait for a reply before sending another message.');
   networkLimit(`chat:${req.account.id}`, 16);
-  if (!req.scoped.state.providers.includes(profile)) { reserveUsage(req.account, { message: true }); store.save(); }
   const request = responseSignal(res);
   chatting.add(req.account.id);
   try {
-    const reply = await chatWithProvider({ ...profile }, store, messages, request.signal);
+    const reply = await fn(request.signal);
     if (!request.signal.aborted) res.json(reply);
   } catch (error) { if (!request.signal.aborted) throw error; }
   finally { request.release(); chatting.delete(req.account.id); }
+}
+app.post('/api/chat', async (req, res) => {
+  const { providerId, messages } = chatInput(req.body);
+  const profile = chatProfile(req, providerId);
+  await chatRequest(req, res, (signal) => {
+    chargeMessage(req, profile);
+    return chatWithProvider({ ...profile }, store, messages, signal);
+  });
+});
+app.post('/api/chat/apps', async (req, res) => {
+  const { providerId, messages } = chatInput(req.body);
+  const profile = chatProfile(req, providerId, true), revision = profile.revision || profile.id;
+  const { connectionId } = req.body;
+  if (typeof connectionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(connectionId)) throw new HttpError(400, 'Choose one of your connected app accounts.');
+  const ensure = () => {
+    ensureSession(req);
+    if (req.scoped.chatProfile(providerId) !== profile || (profile.revision || profile.id) !== revision) throw new HttpError(409, 'The selected model changed. Refresh your workspace.');
+  };
+  await chatRequest(req, res, (signal) => appChat.plan({
+    account: req.account, sessionKey: auth.sessionKey(req), profile: { ...profile }, messages, connectionId, ensure, signal,
+    charge: () => chargeMessage(req, profile),
+  }));
+});
+app.post('/api/chat/apps/actions/:id', async (req, res) => {
+  if (req.body?.approved !== true || Object.keys(req.body).length !== 1) throw new HttpError(400, 'Review and approve this exact app action first.');
+  await chatRequest(req, res, (signal) => appChat.run({
+    account: req.account, sessionKey: auth.sessionKey(req), id: req.params.id, ensure: () => ensureSession(req), getProfile: (id) => req.scoped.chatProfile(id), signal,
+  }));
+});
+app.delete('/api/chat/apps/actions/:id', (req, res) => {
+  appChat.cancel(req.account, auth.sessionKey(req), req.params.id);
+  res.status(204).end();
 });
 
 const providerOptions = (req) => ({ allowLocal: req.account.role === 'admin' });
@@ -743,14 +827,15 @@ app.put('/api/settings/captions', (req, res) => {
   store.save();
   res.json(req.scoped.state.captions);
 });
+const requireLegacySetup = (_req, _res, next) => legacySetup ? next() : next(new HttpError(410, 'New app setup has moved to Composio in Settings → Integrations.'));
 app.get('/api/mcp', (req, res) => res.json(req.scoped.state.mcps.map(publicMcp)));
-app.post('/api/mcp', (req, res) => {
+app.post('/api/mcp', requireLegacySetup, (req, res) => {
   const profile = mcpInput(req.body || {}, null, store);
   req.scoped.state.mcps.push(profile);
   store.save();
   res.status(201).json(publicMcp(profile));
 });
-app.put('/api/mcp/:id', (req, res) => {
+app.put('/api/mcp/:id', requireLegacySetup, (req, res) => {
   const profile = mcpById(req);
   Object.assign(profile, mcpInput(req.body || {}, profile, store));
   store.save();
@@ -762,7 +847,7 @@ app.delete('/api/mcp/:id', (req, res) => {
   store.save();
   res.status(204).end();
 });
-app.post('/api/mcp/:id/inspect', async (req, res) => {
+app.post('/api/mcp/:id/inspect', requireLegacySetup, async (req, res) => {
   networkLimit(`mcp:${req.account.id}`, 16);
   const profile = mcpById(req), snapshot = { ...profile };
   const tools = await inspectMcp(snapshot, store);
@@ -772,7 +857,7 @@ app.post('/api/mcp/:id/inspect', async (req, res) => {
   }
   res.json(tools);
 });
-app.post('/api/mcp/:id/run', async (req, res) => {
+app.post('/api/mcp/:id/run', requireLegacySetup, async (req, res) => {
   networkLimit(`mcp:${req.account.id}`, 16);
   res.json(await runMcp({ ...mcpById(req) }, store, req.body || {}));
 });
@@ -787,8 +872,8 @@ app.post('/api/mcp/:id/channels', async (req, res) => {
 
 const sites = ['google', 'tiktok'];
 for (const site of sites) {
-  app.put(`/api/${site}/config`, (req, res) => res.json(connections(req.account)[site].configure(req.body || {})));
-  app.post(`/api/${site}/connect`, (req, res) => {
+  app.put(`/api/${site}/config`, requireLegacySetup, (req, res) => res.json(connections(req.account)[site].configure(req.body || {})));
+  app.post(`/api/${site}/connect`, requireLegacySetup, (req, res) => {
     const origin = req.get('origin') || publicOrigin || `${secure(req) ? 'https' : 'http'}://${req.get('host')}`;
     const service = connections(req.account)[site];
     const result = site === 'google' ? service.connect(req.body?.targets, origin) : { url: service.connect(origin), secure: true };
@@ -817,6 +902,8 @@ server.listen(port, host, () => {
 });
 for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => {
   closing = true;
+  composio.stop();
+  appChat.stop();
   clearTimeout(replayTimer);
   current?.ctrl.abort(new Error('Server is stopping.'));
   server.close(() => { if (watcher) watcher.dispose().finally(() => process.exit(0)); else process.exit(0); });

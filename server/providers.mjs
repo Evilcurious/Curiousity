@@ -76,24 +76,35 @@ export async function listModels(profile, store) {
 
 const chatParts = (parts) => Array.isArray(parts) ? parts.filter((part) => typeof part?.text === 'string' && (part.type === undefined || part.type === 'text') && !part.thought).map((part) => part.text).join('\n') : '';
 
-export async function chatWithProvider(profile, store, messages, signal) {
+async function chatText(profile, store, messages, { signal, timeout = 85_000, instruction, json = false }) {
   const kind = providerCatalog[profile.type].kind;
-  const timeout = 85_000;
   let output;
   if (kind === 'anthropic') {
-    const result = await request(profile, store, '/messages', { body: { model: profile.model, messages, max_tokens: 2048 }, signal, timeout });
+    const result = await request(profile, store, '/messages', { body: { model: profile.model, messages, max_tokens: 2048, ...(instruction && { system: instruction }) }, signal, timeout });
     output = chatParts(result?.content);
   } else if (kind === 'gemini') {
     const contents = messages.map(({ role, content }) => ({ role: role === 'assistant' ? 'model' : 'user', parts: [{ text: content }] }));
-    const result = await request(profile, store, `/models/${encodeURIComponent(profile.model.replace(/^models\//, ''))}:generateContent`, { body: { contents, generationConfig: { maxOutputTokens: 2048 } }, signal, timeout });
+    const body = { contents, generationConfig: { maxOutputTokens: 2048, ...(json && { responseMimeType: 'application/json' }) }, ...(instruction && { systemInstruction: { parts: [{ text: instruction }] } }) };
+    const result = await request(profile, store, `/models/${encodeURIComponent(profile.model.replace(/^models\//, ''))}:generateContent`, { body, signal, timeout });
     output = chatParts(result?.candidates?.[0]?.content?.parts);
   } else {
     const limit = profile.type === 'openai' ? { max_completion_tokens: 2048 } : { max_tokens: 2048 };
-    const result = await request(profile, store, '/chat/completions', { body: { model: profile.model, messages, ...limit }, signal, timeout });
+    const body = { model: profile.model, messages: instruction ? [{ role: 'system', content: instruction }, ...messages] : messages, ...limit };
+    const result = await request(profile, store, '/chat/completions', { body, signal, timeout });
     const content = result?.choices?.[0]?.message?.content;
     output = typeof content === 'string' ? content : chatParts(content);
   }
   if (!output.trim()) throw new HttpError(502, 'The model did not return a text reply. Choose a chat-capable model and try again.');
+  return output;
+}
+
+export function appReplyWithProvider(profile, store, instruction, messages, { context, json, signal, timeout = 55_000 }) {
+  const input = [...messages.slice(0, -1), { role: 'user', content: JSON.stringify({ request: messages.at(-1).content, app_context: context }) }];
+  return chatText(profile, store, input, { instruction, json, signal, timeout });
+}
+
+export async function chatWithProvider(profile, store, messages, signal) {
+  const output = await chatText(profile, store, messages, { signal });
   const key = store.unseal(profile.apiKey);
   const safe = (key ? output.replaceAll(key, '[redacted]') : output).trim();
   return { reply: safe.slice(0, chatLimits.assistant).replace(/[\uD800-\uDBFF]$/, ''), truncated: safe.length > chatLimits.assistant };

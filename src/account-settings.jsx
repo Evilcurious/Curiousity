@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, BadgeCheck, Check, Cpu, Crown, Globe2, ImagePlus, KeyRound, Moon, Palette, Plug, RefreshCw, Search, Server, Shield, Sun, UserRound, Users } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Check, Cpu, Crown, Globe2, ImagePlus, KeyRound, Moon, Palette, Plug, RefreshCw, Search, Shield, Sun, UserRound, Users } from 'lucide-react';
 import { ActionLink, api, Banner, Button, EmptyState, Glyph, Modal, PageHeading, PanelHeading } from './ui.jsx';
 import { Logo } from './brand.jsx';
 import { PasswordSettings } from './password-settings.jsx';
@@ -7,14 +7,14 @@ import { defaultTheme, themes, themeStyle } from '../shared/themes.mjs';
 import { limitLabels, overrideMax, planLabel, plans } from '../shared/membership.mjs';
 import { PlanPicker, PlanUsage } from './membership.jsx';
 import { Field, Select } from './forms.jsx';
+import { ComposioAdmin } from './composio.jsx';
 
 export const sections = [
   { id: 'account', label: 'Account', icon: UserRound, copy: 'Your sign-in, membership and limits.' },
   { id: 'appearance', label: 'Appearance', icon: Palette, copy: 'See the theme your administrator set.' },
   { id: 'providers', label: 'AI Providers', icon: Cpu, copy: 'Manage private AI keys and model profiles.' },
-  { id: 'mcp', label: 'MCP servers', icon: Server, copy: 'Connect Buffer and other remote MCP tools.' },
-  { id: 'integrations', label: 'Integrations', icon: Plug, copy: 'Connect your delivery accounts.' },
-  { id: 'admin', label: 'Admin', icon: Shield, copy: 'Manage memberships and workspace branding.', admin: true },
+  { id: 'integrations', label: 'Integrations', icon: Plug, copy: 'Connect your own apps to Chat.' },
+  { id: 'admin', label: 'Admin', icon: Shield, copy: 'Configure Composio, memberships and branding.', admin: true },
 ];
 const visibleSections = (user) => sections.filter((section) => !section.admin || user?.role === 'admin');
 export function SettingsTabs({ tab, user }) {
@@ -28,7 +28,7 @@ export function SettingsHome({ user, workspace, branding }) {
   const stats = {
     account: planLabel(user.plan?.id),
     appearance: themes[branding?.theme || defaultTheme]?.label, providers: `${workspace?.providers?.length || 0} personal profiles`,
-    mcp: `${workspace?.mcps?.length || 0} saved servers`, integrations: `${Number(Boolean(workspace?.google?.connected)) + Number(Boolean(workspace?.tiktok?.connected)) + Number(Boolean(workspace?.mcps?.some((row) => row.kind === 'buffer' && row.checkedAt)))} connected`, admin: 'Workspace controls',
+    integrations: workspace?.composio?.ready ? 'Powered by Composio' : 'App connections', admin: 'Workspace controls',
   };
   return <div className="view-enter">
     <PageHeading label="WORKSPACE / SETTINGS" title="Settings" subtitle="Manage your tools, connections, and how Curiousity looks. Credentials stay private to each account."/>
@@ -128,7 +128,7 @@ async function pngLogo(file) {
   } finally { bitmap.close(); }
 }
 
-export function AdminSettings({ user, branding, onBrand, notify }) {
+export function AdminSettings({ user, branding, onBrand, notify, refresh }) {
   const [rows, setRows] = useState([]), [query, setQuery] = useState(''), [next, setNext] = useState(null), [canList, setCanList] = useState(false);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true), [error, setError] = useState(''), [busy, setBusy] = useState(''), [edit, setEdit] = useState(null);
@@ -167,7 +167,8 @@ export function AdminSettings({ user, branding, onBrand, notify }) {
   }
   if (user.role !== 'admin') return <div className="panel"><EmptyState icon={Shield} title="Admin access required">This page is only available to the workspace administrator.</EmptyState></div>;
   return <div className="view-enter">
-    <PageHeading label="SETTINGS / ADMIN" title="Workspace admin" subtitle="Manage memberships, sign-in details, and the look of the workspace."/>
+    <PageHeading label="SETTINGS / ADMIN" title="Workspace admin" subtitle="Configure app connections, member access, and how the workspace looks."/>
+    <ComposioAdmin refresh={refresh} notify={notify}/>
     <section className="panel service-panel">
       <PanelHeading icon={Users} title="Member access" description="Activate or extend plans here after payment is arranged on WhatsApp."><Button icon={RefreshCw} onClick={() => setRevision((n) => n + 1)} disabled={loading || Boolean(busy)}>Refresh</Button></PanelHeading>
       <label className="search-field admin-search"><Search size={16}/><input type="search" aria-label="Search accounts" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find an account by email…"/></label>

@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, BookOpen, Captions, Check, ChevronDown, CircleHelp, Clipboard, Cloud, Cpu, Crown, Download, KeyRound, Link2, LockKeyhole, Plus, RefreshCw, Search, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
-import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Modal, PageHeading, PanelHeading, TikTokIcon } from './ui.jsx';
-import { googleDestinations } from './delivery.jsx';
+import { Captions, Check, ChevronDown, Clipboard, Cpu, Crown, Download, KeyRound, Plus, RefreshCw, Search, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
+import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Modal, PageHeading, PanelHeading } from './ui.jsx';
+import { ConnectedApps } from './composio.jsx';
 import { providerCatalog as providers } from '../shared/providers.mjs';
 
 import { Field, PasswordInput, Select } from './forms.jsx';
-import { BufferIcon } from './mcp.jsx';
 
 function ProviderDialog({ existing, onClose, onSaved, allowLocal }) {
   const [fields, setFields] = useState(existing ? { ...existing, apiKey: '' } : { type: 'openai', name: '', baseUrl: providers.openai.baseUrl, apiKey: '', model: providers.openai.model });
@@ -107,112 +106,36 @@ export function Providers({ user, workspace, refresh, notify }) {
   </div>;
 }
 
-function ConnectionBadge({ online }) { return <span className={`badge ${online ? 'badge-green' : ''}`}><i/>{online ? 'Connected' : 'Not connected'}</span>; }
-
-function GoogleConnection({ google, refresh, notify, embedded }) {
-  const origin = window.location.origin;
-  const suggestedCallback = `${origin}/api/google/callback`;
-  const [fields, setFields] = useState({ clientId: '', clientSecret: '', redirectUri: suggestedCallback });
-  const [targets, setTargets] = useState({ drive: true, youtube: false });
-  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [disconnect, setDisconnect] = useState(false);
-  useEffect(() => setFields({ clientId: google?.clientId || '', clientSecret: '', redirectUri: google?.redirectUri || suggestedCallback }), [google?.clientId, google?.redirectUri, suggestedCallback]);
-  useEffect(() => {
-    if (google?.connected) setTargets({ drive: google.grants.drive, youtube: google.grants.youtube });
-  }, [google?.connected, google?.grants.drive, google?.grants.youtube]);
-  const field = (name, value) => setFields((previous) => ({ ...previous, [name]: value }));
-  const selected = Object.keys(googleDestinations).filter((target) => targets[target]);
-  async function run(action) {
-    setError(''); setBusy(action);
+function SavedDestinations({ workspace, refresh, notify }) {
+  const [removing, setRemoving] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const google = workspace?.google;
+  const destinations = [
+    ...(google?.connected || google?.hasSavedAccount ? [{ label: google.connected ? `Google · ${google.account.name}` : 'Google (legacy)', copy: google.connected ? 'Drive and private YouTube delivery' : 'No longer authorized for clip delivery', route: '/google/disconnect', method: 'POST' }] : []),
+    ...(workspace?.tiktok?.accounts || []).map((row) => ({ label: `TikTok · ${row.name}`, copy: row.available ? 'Reviewed inbox drafts' : 'Paused by your account’s plan limit', route: '/tiktok/disconnect', method: 'POST', body: { accountId: row.id } })),
+    ...(workspace?.mcps || []).map((row) => ({ label: row.name, copy: row.kind === 'buffer' ? 'Buffer clip drafts with this saved credential' : 'Archived MCP profile; not available in Chat', route: `/mcp/${row.id}`, method: 'DELETE' })),
+  ];
+  if (!destinations.length) return null;
+  async function remove() {
+    setBusy(true); setError('');
     try {
-      if (action === 'connect') {
-        const { url } = await api('/google/connect', { method: 'POST', body: { targets: selected } });
-        window.location.assign(url);
-      } else if (action === 'save') {
-        await api('/google/config', { method: 'PUT', body: fields });
-        field('clientSecret', ''); await refresh(); notify('Google OAuth settings saved.');
-      } else {
-        await api('/google/disconnect', { method: 'POST' });
-        setDisconnect(false); await refresh(); notify('Google account disconnected.');
-      }
+      await api(removing.route, { method: removing.method, body: removing.body });
+      await refresh(); setRemoving(null); notify('Saved connection removed.');
     } catch (err) { setError(err.message); }
-    finally { setBusy(''); }
+    finally { setBusy(false); }
   }
-  return <section className="panel service-panel integration-panel" aria-label="Google connections">
-    <PanelHeading icon={Cloud} title="Google" description="One sign-in for Drive exports and private YouTube uploads."><ConnectionBadge online={google?.connected}/></PanelHeading>
-    <fieldset className="google-destinations">
-      <legend>Permissions to request</legend>
-      {Object.entries(googleDestinations).map(([target, { icon: Icon, label, detail }]) => <label className="google-destination" key={target}>
-        <input type="checkbox" checked={targets[target]} onChange={(event) => setTargets((previous) => ({ ...previous, [target]: event.target.checked }))}/><Icon size={18}/><div><strong>{label}</strong><span>{detail}</span>{google?.connected && <small>{google.grants[target] ? 'Granted' : 'Not granted'}</small>}</div>
-      </label>)}
-    </fieldset>
-    <div className="connection-row"><div><strong>{google?.account?.name || 'Google account'}</strong><p>{google?.connected ? 'Reconnect to change the requested permissions or switch accounts.' : google?.configured ? 'Choose one or both permissions, then sign in.' : 'Save a Google OAuth web client below to sign in.'}</p></div><div className="connection-actions">
-      {google?.connected && <Button icon={Unplug} disabled={Boolean(busy)} onClick={() => { setError(''); setDisconnect(true); }}>Disconnect Google</Button>}
-      <Button icon={Link2} tone={google?.connected ? 'neutral' : 'primary'} busy={busy === 'connect'} disabled={embedded || !google?.configured || !selected.length || Boolean(busy && busy !== 'connect')} onClick={() => run('connect')}>{google?.connected ? 'Reconnect' : 'Connect Google'}</Button>
-    </div></div>
-    {google?.managedByEnv ? <p className="privacy-note"><LockKeyhole size={16}/> This app is configured with server environment variables.</p> : <form className="modal-form integration-form" onSubmit={(event) => { event.preventDefault(); run('save'); }}>
-      <h3>Google OAuth web client</h3>
-      <div className="form-pair"><Field label="Google client ID"><input required value={fields.clientId} onChange={(event) => field('clientId', event.target.value)} maxLength={300} placeholder="Client ID from Google Cloud" autoComplete="off"/></Field><Field label="Google client secret"><input type="password" required={!google?.configured} value={fields.clientSecret} onChange={(event) => field('clientSecret', event.target.value)} maxLength={500} placeholder={google?.configured ? 'Leave blank to keep saved secret' : 'Client secret from Google Cloud'} autoComplete="new-password"/></Field></div>
-      <Field label="Google OAuth redirect URL" hint="Register this exact URL. Use localhost on your laptop or HTTPS on your VPS."><input type="url" required value={fields.redirectUri} onChange={(event) => field('redirectUri', event.target.value)} maxLength={500}/></Field>
-      <div className="integration-save"><Button icon={Check} type="submit" busy={busy === 'save'} disabled={Boolean(busy && busy !== 'save')}>Save Google configuration</Button></div>
-    </form>}
-    {error && !disconnect && <Banner>{error}</Banner>}
-    <details className="connection-help"><summary>Set up Google access</summary><ol>
-      <li>In <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer">Google Cloud Console <ArrowUpRight size={13}/></a>, enable the Drive API, YouTube Data API v3, or both.</li>
-      <li>Set up the OAuth consent screen and a Web application client. Add yourself as a test user if required and register the exact callback above.</li>
-      <li>Save the credentials here and connect. On a finished project, use <strong>Send to…</strong> to preview and approve the upload. Google account, project and API limits apply.</li>
-    </ol><p>Drive access is limited to app-created or app-opened files. YouTube sign-in is not required to clip public sources.</p></details>
-    {disconnect && <Confirm title="Disconnect Google?" message="This removes the saved Google tokens from Curiousity. An upload already in progress may finish. Uploaded files and videos stay in your account. Manage access in your Google account if you also want to revoke the grant." label="Disconnect Google" onClose={() => setDisconnect(false)} onConfirm={() => run('disconnect')} busy={busy === 'disconnect'} error={error}/>}
-  </section>;
+  return <details className="panel service-panel composio-legacy"><summary>Previously saved integrations</summary>
+    <p>Previously connected clip destinations still work from finished projects while their authorizations remain valid. New app connections use Composio and are separate from clip uploads. Old credentials aren’t transferred to Composio.</p>
+    {destinations.map((row, index) => <div className="connection-row composio-legacy-row" key={`${row.route}:${row.body?.accountId || index}`}><div><strong>{row.label}</strong><p>{row.copy}</p></div><Button icon={Unplug} aria-label={`Remove ${row.label}`} onClick={() => { setRemoving(row); setError(''); }}>Remove</Button></div>)}
+    {removing && <Confirm title={`Remove ${removing.label}?`} message="The saved account credential will be removed from Curiousity. Check the provider’s settings to revoke the grant too. Files and drafts already sent stay at their destination." label="Remove connection" onClose={() => { if (!busy) setRemoving(null); }} onConfirm={remove} busy={busy} error={error}/>}
+  </details>;
 }
 
-export function Integrations({ workspace, refresh, notify, notice }) {
-  const tiktok = workspace?.tiktok;
-  const accounts = tiktok?.accounts || (tiktok?.account ? [tiktok.account] : []);
-  const accountLimit = tiktok?.accountLimit;
-  const full = accountLimit != null && accounts.length >= accountLimit;
-  const embedded = window.parent !== window;
-  const suggestedCallback = window.location.protocol === 'https:' ? `${window.location.origin}/api/tiktok/callback` : '';
-  const [fields, setFields] = useState({ clientKey: '', clientSecret: '', redirectUri: suggestedCallback });
-  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [disconnect, setDisconnect] = useState(null);
-  useEffect(() => setFields({ clientKey: tiktok?.clientKey || '', clientSecret: '', redirectUri: tiktok?.redirectUri || suggestedCallback }), [tiktok?.clientKey, tiktok?.redirectUri, suggestedCallback]);
-  const field = (name, value) => setFields((prev) => ({ ...prev, [name]: value }));
-  async function run(action) {
-    setError(''); setBusy(action);
-    try {
-      if (action === 'connect') {
-        const { url } = await api('/tiktok/connect', { method: 'POST' });
-        window.location.assign(url);
-      } else if (action === 'save') {
-        await api('/tiktok/config', { method: 'PUT', body: fields });
-        field('clientSecret', ''); await refresh(); notify('TikTok app settings saved.');
-      } else {
-        await api('/tiktok/disconnect', { method: 'POST', body: { accountId: disconnect.id } });
-        setDisconnect(null); await refresh(); notify('TikTok account disconnected.');
-      }
-    } catch (err) { setError(err.message); }
-    finally { setBusy(''); }
-  }
-  const connectedNotice = ['Google connected.', 'TikTok connected.'].includes(notice);
+export function Integrations({ user, workspace, refresh, notify, notice, composioNotice }) {
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / CONNECTIONS" title="Integrations" subtitle="Manage your Buffer, Google Drive, YouTube and TikTok connections. You can render and download clips without connecting any of them."/>
-    {notice && <Banner tone={connectedNotice ? 'success' : 'error'} icon={connectedNotice ? Check : CircleHelp}>{notice}</Banner>}
-    {embedded && <Banner tone="warning" icon={ArrowUpRight}>For Google or TikTok OAuth, <a href={`${window.location.origin}/#/settings/integrations`} target="_blank" rel="noreferrer">open Curiousity in its own tab</a> and sign in there.</Banner>}
-    <section className="panel service-panel integration-panel"><PanelHeading icon={BufferIcon} title="Buffer" description="Connect via MCP to review and send draft posts using your own Buffer account."><ActionLink href={workspace?.mcps?.some((profile) => profile.kind === 'buffer') ? '#/settings/mcp' : '#/settings/mcp?preset=buffer'} icon={Link2}>{workspace?.mcps?.some((profile) => profile.kind === 'buffer') ? 'Manage in MCP' : 'Connect Buffer'}</ActionLink></PanelHeading></section>
-    <GoogleConnection google={workspace?.google} refresh={refresh} notify={notify} embedded={embedded}/>
-    <section className="panel service-panel integration-panel" aria-label="TikTok connection">
-      <PanelHeading icon={TikTokIcon} title="TikTok" description="Send approved video drafts to the TikTok inbox."><ConnectionBadge online={tiktok?.connected}/></PanelHeading>
-      <div className="connection-row"><div><strong>{accounts.length} {accountLimit != null && `of ${accountLimit} `}{accounts.length === 1 && accountLimit == null ? 'account' : 'accounts'} linked</strong><p>{full ? 'Your slots are full. Reconnect the same account, or disconnect one before adding a different creator.' : tiktok?.configured ? 'Authorize each creator account separately. Choose the destination when reviewing drafts.' : 'Save your TikTok developer app settings to connect a creator account.'}</p></div><Button icon={Link2} tone="primary" busy={busy === 'connect'} disabled={embedded || !tiktok?.configured} onClick={() => run('connect')}>{full ? 'Reconnect account' : 'Connect account'}</Button></div>
-      {accounts.map((account) => <div className="connection-row tiktok-account" key={account.id}><div><strong>{account.name}</strong><p>{account.available === false ? 'Paused · above the current plan’s limit' : 'Can receive reviewed inbox drafts'}</p></div><Button icon={Unplug} aria-label={`Disconnect ${account.name}`} onClick={() => { setError(''); setDisconnect(account); }}>Disconnect</Button></div>)}
-      {tiktok?.managedByEnv ? <p className="privacy-note"><LockKeyhole size={16}/> This app is configured with server environment variables.</p> : <form className="modal-form integration-form" onSubmit={(event) => { event.preventDefault(); run('save'); }}>
-        <h3>Developer app settings</h3>
-        <div className="form-pair"><Field label="Client key"><input required value={fields.clientKey} onChange={(event) => field('clientKey', event.target.value)} autoComplete="off" maxLength={180} placeholder="TikTok app client key"/></Field><Field label="Client secret"><input type="password" required={!tiktok?.configured} value={fields.clientSecret} onChange={(event) => field('clientSecret', event.target.value)} autoComplete="new-password" maxLength={500} placeholder={tiktok?.configured ? 'Leave blank to keep saved secret' : 'TikTok app client secret'}/></Field></div>
-        <Field label="OAuth redirect URL" hint="Register this exact HTTPS URL in TikTok’s Login Kit. Changing app credentials or the callback disconnects linked TikTok accounts."><input type="url" required value={fields.redirectUri} onChange={(event) => field('redirectUri', event.target.value)} placeholder="https://clips.example.com/api/tiktok/callback"/></Field>
-        <div className="integration-save"><Button icon={Check} type="submit" busy={busy === 'save'}>Save configuration</Button></div>
-      </form>}
-      {error && !disconnect && <Banner>{error}</Banner>}
-    </section>
-    <section className="panel service-panel how-to-panel"><PanelHeading icon={BookOpen} title="Set up TikTok access" description="Use TikTok’s official Login Kit and Content Posting API."/><ol><li>Create an app in <a href="https://developers.tiktok.com/" target="_blank" rel="noreferrer">TikTok for Developers <ArrowUpRight size={13}/></a> and add Login Kit and Content Posting API.</li><li>Register the HTTPS callback and request the <code>user.info.basic</code> and <code>video.upload</code> scopes for the account.</li><li>Connect the account here. In a finished project, select clips and confirm the draft upload after previewing them.</li></ol><p className="privacy-note"><ShieldCheck size={16}/> TikTok approval and upload limits apply. Curiousity does not publish unattended to a public feed.</p></section>
-    {disconnect && <Confirm title={`Disconnect ${disconnect.name}?`} message="This removes only this account’s saved tokens from Curiousity. Drafts already sent to TikTok will stay there." label="Disconnect" onClose={() => { if (!busy) setDisconnect(null); }} onConfirm={() => run('disconnect')} busy={busy === 'disconnect'} error={error}/>}
+    <PageHeading label="WORKSPACE / CONNECTIONS" title="Integrations" subtitle="Connect and manage the app accounts you use with Curiousity."/>
+    <ConnectedApps user={user} ready={workspace?.composio?.ready} notice={composioNotice}/>
+    {notice && <Banner tone="info">{notice}</Banner>}
+    <SavedDestinations workspace={workspace} refresh={refresh} notify={notify}/>
   </div>;
 }
 

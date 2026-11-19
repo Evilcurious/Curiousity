@@ -28,7 +28,7 @@ const adminEnv = { ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: exampleAdmin
 
 test('cookie auth, signup validation, per-account integrations and admin-approved premium access', async (t) => {
   const root = await temp(t);
-  const engine = await startEngine(t, { env: { DATA_DIR: root, ...adminEnv, GOOGLE_CLIENT_ID: 'env-google-id', GOOGLE_CLIENT_SECRET: 'fixture-google-private', GOOGLE_REDIRECT_URI: 'http://localhost:5173/api/google/callback' } });
+  const engine = await startEngine(t, { env: { DATA_DIR: root, ...adminEnv, ENABLE_LEGACY_INTEGRATION_API: 'true', GOOGLE_CLIENT_ID: 'env-google-id', GOOGLE_CLIENT_SECRET: 'fixture-google-private', GOOGLE_REDIRECT_URI: 'http://localhost:5173/api/google/callback' } });
   const admin = engine.agent(), member = engine.agent(), other = engine.agent(), anonymous = engine.agent();
   const locked = await anonymous.request('/workspace');
   assert.equal(locked.status, 401);

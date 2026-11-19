@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, ArrowRight, Captions, Check, ChevronDown, CircleAlert, Clapperboard, Clock3, Copy, Download, ExternalLink, Film, Hash, Info, LoaderCircle, LockKeyhole, Play, Plug, Plus, Radio, RefreshCw, Search, Sparkles, Square, Trash2, Upload, Users } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowRight, Captions, Check, ChevronDown, CircleAlert, Clapperboard, Clock3, Copy, Download, ExternalLink, Film, Hash, Info, LoaderCircle, LockKeyhole, Play, Plus, Radio, RefreshCw, Search, Sparkles, Square, Trash2, Upload, Users } from 'lucide-react';
 import { ACTIVE, ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, JobBadge, Modal, PageHeading, POSTING, SHORT_DATE, STATES, TikTokIcon, timecode } from './ui.jsx';
 import { DemoRow, ProjectRow } from './studio.jsx';
 import { availableDestinations, clipRatio, clipUploading, GoogleDeliveryStatus, GoogleUploadReview } from './delivery.jsx';
 import { exportFrame, languageLabel, platforms } from '../shared/exports.mjs';
 import { captionScriptFont, captionStyleLabel } from '../shared/captions.mjs';
 import { LibraryShareReview, LibraryTabs, SharedLibrary } from './shared-library.jsx';
-import { BufferIcon } from './mcp.jsx';
-import { BufferReview, BufferStatus } from './buffer-review.jsx';
+import { BufferIcon, BufferReview, BufferStatus } from './buffer-review.jsx';
 import { LiveMonitor } from './live-monitor.jsx';
 import { Field, Select } from './forms.jsx';
 
@@ -165,9 +164,8 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
         {job.options.captionStyle && job.clips.some((clip) => clip.burnedCaptions) && <p className="export-style-summary"><Captions size={13}/>{styleLabel} · Burned into MP4</p>}
       </div><JobBadge state={monitorOpen ? 'monitorOpen' : job.status}/></div>
       {canShare && <div className="panel share-bar"><Glyph icon={TikTokIcon}/><div><h3>TikTok drafts</h3><p>{job.options.tiktok ? 'Select the clips you want to send, then review and approve the batch.' : 'Choose clips to send to your TikTok inbox.'}</p></div><Button tone={shareCount ? 'primary' : 'neutral'} icon={ArrowRight} disabled={!shareCount} onClick={() => setReview(true)}>{shareCount ? `Review ${shareCount} selected` : 'Review selected'}</Button></div>}
-      {job.options.tiktok && !canShare && canDeliver && <Banner tone="warning" icon={TikTokIcon}>Connect TikTok in <a href="#/settings/integrations">Integrations</a> to review and send these drafts.</Banner>}
-      <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={canDeliver && availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} onBuffer={canDeliver && (!clip.bufferDraft || clip.bufferDraft.state === 'failed') ? () => setBufferReview(clip.id) : null} notify={notify}/>)}</div>
-      {canDeliver && !job.options.demo && workspace && (!google?.connected || !workspace.tiktok.connected) && <p className="result-connections"><Plug size={15}/><span>Manage connected destinations in <a href="#/settings/integrations">Integrations</a>.</span></p>}
+      {job.options.tiktok && !canShare && canDeliver && <Banner tone="warning" icon={TikTokIcon}>This project no longer has an eligible legacy TikTok connection. Download your clips to upload them yourself.</Banner>}
+      <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={canDeliver && availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} onBuffer={canDeliver && buffers.length > 0 && (!clip.bufferDraft || clip.bufferDraft.state === 'failed') ? () => setBufferReview(clip.id) : null} notify={notify}/>)}</div>
     </>}
     {libraryReview && <LibraryShareReview job={job} onClose={() => setLibraryReview(false)} onUpdate={updateProject} notify={notify}/>}
     {bufferClip && <BufferReview key={bufferClip.id} job={job} clip={bufferClip} frame={frame} profiles={buffers} canHost={workspace?.bufferCanHost} onClose={() => setBufferReview(null)} onSent={(updated, draft) => {

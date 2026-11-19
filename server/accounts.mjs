@@ -12,7 +12,7 @@ const digest = (token) => createHash('sha256').update(token).digest('hex');
 const kdf = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 let hashing = 0;
 
-export const emptyWorkspace = () => ({ providers: [], activeProviderId: null, captions: { providerId: null, model: '' }, google: {}, tiktok: {}, mcps: [] });
+export const emptyWorkspace = () => ({ providers: [], activeProviderId: null, captions: { providerId: null, model: '' }, google: {}, tiktok: {}, mcps: [], composioConnections: [] });
 export const mustChangePassword = (user) => Number.isFinite(user?.temporaryPasswordExpiresAt);
 const expiredPassword = (user) => mustChangePassword(user) && user.temporaryPasswordExpiresAt <= Date.now();
 export const publicAccount = (user) => user ? { id: user.id, email: user.email, role: user.role, premium: canUsePremium(user), premiumRequested: Boolean(user.premiumRequested), mustChangePassword: mustChangePassword(user), plan: membership(user), createdAt: user.createdAt } : null;
@@ -141,7 +141,7 @@ export function createAuth(store, { secure, embedded = () => false, reserved = p
   };
   return {
     allowSignup,
-    identify,
+    identify, sessionKey: tokenOf,
     async signup(req, res) {
       if (!allowSignup) throw new HttpError(403, 'Registration is closed on this instance.');
       throttle(`signup:${req.ip}`, 8);

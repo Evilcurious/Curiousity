@@ -24,7 +24,6 @@
 .admin-row .connection-actions { flex: 0 0 auto; }
 .modal-form .edit-limits-note { padding: 9px 0 2px; }
 .tiktok-destination { max-width: 350px; margin: 14px 0 2px; }
-.tiktok-account > div { min-width: 0; overflow-wrap: anywhere; }
 .live-duration { margin-top: 0; }
 .live-monitor { padding: clamp(12px, 2vw, 22px); }
 .monitor-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 16px 0; }

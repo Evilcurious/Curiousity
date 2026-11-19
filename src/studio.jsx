@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { ArrowRight, ArrowUpRight, AudioLines, Captions, ChevronDown, ChevronRight, Clipboard, Crown, Cpu, Film, Frame, Hash, Languages, Link2, LoaderCircle, Play, Radio, ShieldCheck, SlidersHorizontal, Sparkles, Type } from 'lucide-react';
-import { Banner, Button, JobBadge, Modal, PanelHeading, SHORT_DATE, Switch, TextLink, TikTokIcon, timecode } from './ui.jsx';
+import { Banner, Button, JobBadge, PanelHeading, SHORT_DATE, Switch, TextLink, TikTokIcon, timecode } from './ui.jsx';
 
 import { exportFrame, frameFor, languages, platforms, ratioChoices, romanUrdu } from '../shared/exports.mjs';
 import { captionScriptFont, captionStyleLabel, defaultCaptionStyle } from '../shared/captions.mjs';
@@ -48,7 +48,6 @@ function LanguageSelect({ kind, value, onChange }) {
 export default function Studio({ user, workspace, projects, projectsError, createProject, notify, fields, setFields }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
-  const [connect, setConnect] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
   const urlInput = useRef(null), customInput = useRef(null), ratioInput = useRef(null);
   const profiles = (workspace?.providers || []).filter((profile) => profile.model);
@@ -154,7 +153,7 @@ export default function Studio({ user, workspace, projects, projectsError, creat
           {fields.captions && <Setting icon={Languages} title="Caption language" detail={fields.captionLanguage === romanUrdu ? 'Urdu written in Latin letters' : 'Original or translated'}><LanguageSelect kind="Caption" value={fields.captionLanguage} onChange={(value) => change('captionLanguage', value)}/></Setting>}
           {fields.captions && <Setting icon={Type} title="Caption style" detail={captionStyleLabel(captionStyle)}><Button aria-label="Customize caption style" className="setting-button" onClick={() => setStyleOpen(true)}>Customize</Button></Setting>}
           <Setting icon={Hash} title="Hashtag language" detail="Suggestions, separate from captions"><LanguageSelect kind="Hashtag" value={fields.hashtagLanguage} onChange={(value) => change('hashtagLanguage', value)}/></Setting>
-          <Setting icon={TikTokIcon} title="Send to TikTok" detail={tiktokConnected ? 'Preselect clips for draft review' : 'Account not connected'}><Switch label="Send to TikTok" enabled={tiktokConnected && fields.tiktok} onChange={(value) => tiktokConnected ? change('tiktok', value) : setConnect(true)}/></Setting>
+          {tiktokConnected && <Setting icon={TikTokIcon} title="Send to TikTok" detail="Preselect clips for review with your existing TikTok connection"><Switch label="Send to TikTok" enabled={fields.tiktok} onChange={(value) => change('tiktok', value)}/></Setting>}
           <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Shared AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Shared</option>)}</optgroup>}</OutputSelect></Setting>
         </div>
         {user?.role === 'member' && user.plan?.id === 'free' && <a className="studio-premium" href="#/settings/account?plans=1"><Crown size={16}/><span>Activate Premium</span><ChevronRight size={14}/></a>}
@@ -169,7 +168,6 @@ export default function Studio({ user, workspace, projects, projectsError, creat
       </div>
     </section>
     {styleOpen && <CaptionAppearance value={fields.captionStyle} frame={frame || exportFrame({ platform: fields.platform })} language={fields.captionLanguage} canBurn={workspace?.tools?.subtitles} onClose={() => setStyleOpen(false)} onApply={(style) => { change('captionStyle', style); setStyleOpen(false); }}/>}
-    {connect && <Modal onClose={() => setConnect(false)} title="Connect TikTok" subtitle="Link a TikTok account to send reviewed clips to your inbox. You’ll finish publishing in TikTok."><div className="modal-actions"><Button onClick={() => setConnect(false)}>Not now</Button><a className="button button-primary" href="#/settings/integrations" onClick={() => setConnect(false)}><span>Open integrations</span><ArrowRight size={16}/></a></div></Modal>}
   </div>;
 }
 
