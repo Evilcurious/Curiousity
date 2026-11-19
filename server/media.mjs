@@ -9,6 +9,7 @@ import { makeAss, makeSrt } from './captions.mjs';
 import { maxClips, youtubeSource } from './validation.mjs';
 import { rankWithProvider, transcribeRemote } from './providers.mjs';
 import { liveArgs, livePlans, livePlanKey } from './live.mjs';
+import { captureSegments, runLiveMonitor } from './live-monitor.mjs';
 import { checkReplayDeadline, planReplayCheck, replayState } from './replay.mjs';
 import { exportFrame, languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { localizeClips, suggestHashtags } from './localization.mjs';
@@ -98,29 +99,30 @@ function variedPlans(plans, attempted) {
   return [...primary.values(), ...secondary];
 }
 
-async function captureLive(meta, options, scratch, session, progress, update) {
-  const video = join(scratch, 'capture.mkv');
+async function captureLive(meta, options, scratch, { signal, list, onAttempt, onMedia }, progress, update) {
+  const pattern = join(scratch, 'live-%06d.mkv');
   const duration = Math.min(options.liveMinutes * 60, maxSourceSeconds);
-  const size = withSizeLimit(scratch, session.signal);
+  const size = withSizeLimit(scratch, AbortSignal.any([signal, AbortSignal.timeout((duration + 100) * 1000)]));
   const attempted = new Set();
   let rejected;
   async function attempt(plan) {
     attempted.add(livePlanKey(plan));
-    await rm(video, { force: true });
-    update({ capturedSeconds: 0, detail: `Recording from the live edge · ${plan.label}.` });
-    let mediaSeconds = 0, lastMedia = Date.now(), watchdog, hardStop, pending = '', finishedEarly = false;
+    await rm(list, { force: true });
+    for (const file of await readdir(scratch)) if (/^live-\d{6}\.mkv$/.test(file)) await rm(join(scratch, file), { force: true });
+    size.signal.throwIfAborted();
+    onAttempt();
+    update({ capturedSeconds: 0, liveInput: plan.label, detail: `Recording from the live edge · ${plan.label}.` });
+    let mediaSeconds = 0, lastMedia = Date.now(), watchdog, hardStop, pending = '';
     try {
-      await run(ffmpeg, liveArgs(plan, duration, video, maxSourceBytes), {
+      await run(ffmpeg, liveArgs(plan, duration, pattern, maxSourceBytes, list), {
         signal: size.signal, timeout: (duration + 70) * 1000,
         onChild: (stop) => {
-          function requestStop() {
-            session.finishCapture = null;
+          watchdog = setInterval(() => {
+            if (Date.now() - lastMedia < 38_000) return;
             clearInterval(watchdog);
             stop('SIGINT');
             hardStop = setTimeout(() => stop('SIGKILL'), 4500).unref();
-          }
-          session.finishCapture = () => { finishedEarly = true; requestStop(); };
-          watchdog = setInterval(() => { if (Date.now() - lastMedia >= 38_000) requestStop(); }, 2000).unref();
+          }, 2000).unref();
         },
         onData: (buffer) => {
           const received = (pending + buffer.toString()).split('\n');
@@ -132,27 +134,21 @@ async function captureLive(meta, options, scratch, session, progress, update) {
             if (seconds <= mediaSeconds) continue;
             mediaSeconds = seconds;
             lastMedia = Date.now();
+            onMedia(seconds);
             progress(Math.min(39, 9 + mediaSeconds / duration * 30), { capturedSeconds: Math.floor(mediaSeconds) });
           }
         },
       });
     } catch (error) {
       if (/403|429|forbidden|not authorized/i.test(error.output || '')) rejected = true;
-    } finally { session.finishCapture = null; clearInterval(watchdog); clearTimeout(hardStop); }
+    } finally { clearInterval(watchdog); clearTimeout(hardStop); }
     await size.check();
-    if (size.signal.aborted) throw size.signal.reason;
-    if ((await stat(video).catch(() => null))?.size > 0) {
-      try {
-        const probe = await audioProfile(video, size.signal);
-        // Finish-capture is intentionally an interrupt. The written file is usable if it has enough media.
-        if ((probe.duration || mediaSeconds) >= 6) {
-          update({ capturedSeconds: Math.floor(Math.min(duration, probe.duration || mediaSeconds)) });
-          return { path: video, duration: Math.min(duration, probe.duration || mediaSeconds), profile: probe, inputFormat: plan.label };
-        }
-      } catch (error) { if (size.signal.aborted) throw error; }
-    }
-    if (finishedEarly) throw new Error('The saved live window was too short or could not be read. Retry and let it record for longer.');
-    return null;
+    size.signal.throwIfAborted();
+    const rows = captureSegments(await readFile(list, 'utf8').catch((error) => { if (error.code === 'ENOENT') return ''; throw error; }));
+    const length = Math.min(duration, rows.at(-1)?.end || 0);
+    if (length < 6) return null;
+    update({ capturedSeconds: Math.floor(length) });
+    return { duration: length, inputFormat: plan.label };
   }
   async function tryPlans(plans, limit) {
     for (const plan of variedPlans(plans, attempted).slice(0, limit)) {
@@ -311,9 +307,111 @@ async function renderClip({ clip, path, options, rows, language, frame, dir, scr
   return { withCaptions: rows.length > 0, burnedCaptions: rows.length > 0 && tools.subtitles, withPoster: existsSync(join(dir, 'poster.jpg')), missingGlyphs };
 }
 
+async function analyzeMedia({ job, store, options, root, scratch, signal, update, path, meta, duration, audio, transcript, tools, isLive = false, offset = 0, batchLimit, reaction }) {
+  const frame = exportFrame(options);
+  const warnings = [...(job.warnings || [])];
+  const warn = (message) => { if (!warnings.includes(message)) warnings.push(message); };
+  const report = isLive ? () => {} : update;
+  if (isLive && !audio.length) warn('The live window had no audio track. Clips can still be exported without spoken captions.');
+  const heatmap = !isLive && Array.isArray(meta?.heatmap) ? meta.heatmap : [];
+  const candidates = buildCandidates({ duration, count: batchLimit ?? options.count, cues: transcript.cues, audio, heatmap }).filter((item) => !isLive || !job.clips.some((clip) => (clip.timing === 'live') && Math.min(clip.end, offset + item.end) - Math.max(clip.start, offset + item.start) > 0.5));
+  const automatic = options.count === 'auto';
+  const limit = batchLimit ?? (automatic ? maxClips : options.count);
+  const selection = options.aiProfile || 'workspace';
+  const providerId = Object.hasOwn(job, 'chatProviderId') ? job.chatProviderId : options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
+  const savedProfile = providerId ? store.chatProfile(providerId) : null;
+  const profile = savedProfile?.model ? { ...savedProfile } : null;
+  if (providerId && !profile) warn('The selected AI profile or chat model is no longer available. Local scoring was used.');
+  let engine = 'Local analysis', ordered = candidates;
+  if (reaction && !profile?.model) return 'Chat spike found, but the selected AI model is unavailable.';
+  if (profile?.model && (reaction || candidates.some((m) => m.excerpt))) {
+    const eligible = reaction ? candidates : candidates.filter((m) => m.excerpt.length > 15);
+    const pool = [...new Set([...pickMoments(eligible, Math.max(12, limit)), ...eligible])].slice(0, Math.min(30, Math.max(14, limit * 2)));
+    if (pool.length) {
+      report({ progress: 57, detail: `Ranking candidate moments with ${profile.name}.` });
+      try {
+        const ranking = await rankWithProvider(profile, store, pool, signal, reaction && { messages: reaction.messages, baseline: reaction.baseline, approximatePeak: Math.max(0, reaction.seconds - offset) });
+        ordered = candidates.map((item) => {
+          const ai = ranking.get(item.id);
+          return ai ? { ...item, score: Math.round(ai.score * 0.7 + item.score * 0.3), title: ai.title || item.title, reason: ai.reason || item.reason, ai: true } : item;
+        }).sort((a, b) => Number(Boolean(b.ai)) - Number(Boolean(a.ai)) || b.score - a.score);
+        if (reaction) ordered = ordered.filter((item) => item.ai);
+        engine = profile.name;
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        if (reaction) return 'Chat spike found, but the AI model could not rank it. No automatic clip was made.';
+        warn('The selected AI model did not return a usable ranking. Local scoring was used instead.');
+      }
+    }
+  } else if (profile?.model) warn('The selected AI model needs a transcript; this source was scored locally.');
+  const { picks, fallback } = automatic ? pickAutoMoments(ordered, limit) : { picks: pickMoments(ordered, limit), fallback: false };
+  if (!picks.length) {
+    if (isLive) return 'No new, non-overlapping clip fits this window.';
+    throw new Error('No playable moment could be found in the source.');
+  }
+  if (automatic && !isLive) {
+    report({ autoSelection: { count: picks.length, fallback }, progress: 59, detail: `Auto selected ${picks.length} ${picks.length === 1 ? 'clip' : 'clips'} from this source.` });
+  } else if (!isLive && picks.length < limit) warn(`Found ${picks.length} distinct moments of ${limit} requested. Longer sources can support more non-overlapping clips.`);
+  const originalRows = options.captions ? picks.map((moment) => clipCues(transcript.cues, moment.start, moment.end)) : picks.map(() => []);
+  const asTracks = (result) => result && { tracks: picks.map((moment) => clipCues(result.cues, moment.start, moment.end)), label: result.label };
+  let localized = { tracks: originalRows, language: transcript.language || null };
+  const target = options.captionLanguage;
+  if (options.captions && target && target !== 'source' && (target !== transcript.language || target === romanUrdu)) {
+    report({ progress: 60, detail: `Preparing ${languageLabel(target)} captions.` });
+    localized = await localizeClips({ original: originalRows, sourceLanguage: transcript.language, target, provider: providerId && store.chatProfile(providerId) ? profile : null, store, signal,
+      tryTrack: async (language) => {
+        if (options.demo) {
+          const translations = JSON.parse(await readFile(join(ROOT, 'server', 'assets', 'demo-translations.json'), 'utf8'));
+          const translated = translations[language];
+          return translated?.length === transcript.cues.length ? asTracks({ cues: transcript.cues.map((row, i) => ({ ...row, text: translated[i] })), label: 'Bundled translation' }) : null;
+        }
+        return isLive ? null : asTracks(await downloadCaptions(meta, options.url, scratch, signal, language));
+      },
+      tryEnglish: path && tools.whisper && audio.some((db) => db > -58) ? async () => {
+        try { return asTracks(await runWhisper(path, signal, true)); }
+        catch (error) { if (signal.aborted) throw signal.reason; return null; }
+      } : null,
+    });
+  }
+  const anyCaptions = localized.tracks.some((rows) => rows.length);
+  if (localized.warning) warn(options.demo ? 'The demo includes English, Urdu, Roman Urdu and Spanish tracks. Original English captions were used.' : localized.warning);
+  if (options.captions && !anyCaptions && !localized.warning && (!isLive || audio.length)) warn(transcript.warning || 'No usable spoken captions were available for these clips.');
+  if (anyCaptions && !tools.subtitles) warn('This FFmpeg build does not support burned subtitles. SRT files are still available.');
+  if (anyCaptions && tools.subtitles) await cp(captionFonts, join(scratch, 'caption-fonts'), { recursive: true });
+  const signals = [...new Set([...(job.signals || []), transcript.cues.length && 'Transcript', audio.some((db) => db > -58) && 'Audio activity', heatmap.length && 'Replay heatmap', reaction && 'Live chat spike'].filter(Boolean))];
+  update({ engine, signals, frame, captionsSource: localized.label || transcript.label, warnings });
+  report({ status: 'rendering', progress: 62, detail: `Rendering 1 of ${picks.length} clips in ${frame.ratio}.` });
+  const fontWarning = 'Some caption characters could not be drawn. Install fonts for the caption language and rerun the project. The SRT contains the full text.';
+  for (const [index, moment] of picks.entries()) {
+    if (signal.aborted) throw signal.reason;
+    const id = `clip-${job.clips.length + 1}`;
+    const rows = localized.tracks[index];
+    report({ detail: `Rendering ${index + 1} of ${picks.length} clips in ${frame.ratio}.`, progress: 62 + Math.floor(index / picks.length * 35) });
+    let rendered;
+    try {
+      await rm(join(root, id), { recursive: true, force: true });
+      rendered = await renderClip({ clip: moment, path, options, rows, language: localized.language, frame, dir: join(root, id), scratch, signal, tools });
+    } catch (error) {
+      await rm(join(root, id), { recursive: true, force: true });
+      if (signal.aborted) throw signal.reason;
+      throw new Error('FFmpeg could not render a clip. Check free disk space and that FFmpeg includes libx264 and libass.');
+    }
+    const { excerpt, ai, ...fields } = moment;
+    fields.start = Number((moment.start + offset).toFixed(3));
+    fields.end = Number((moment.end + offset).toFixed(3));
+    if (reaction && !excerpt) { fields.title = 'Live chat highlight'; fields.reason = `Chat activity rose to ${reaction.messages} messages in ten seconds. AI ranked this window using the available signals.`; }
+    const hashtags = suggestHashtags({ choice: options.hashtagLanguage, transcriptLanguage: transcript.language || sourceLanguage(meta), localizedLanguage: localized.language, excerpt, translated: rows.map((row) => row.text).join(' '), live: isLive });
+    const { missingGlyphs, ...assets } = rendered;
+    if (missingGlyphs) warn(fontWarning);
+    const timing = isLive ? 'live' : job.monitor?.mode === 'full' ? 'replay' : undefined;
+    const clip = { ...fields, id, ...(timing && { timing }), duration: Number((moment.end - moment.start).toFixed(2)), captionLanguage: rows.length ? localized.language : null, ...hashtags, ...assets };
+    update({ clips: [...job.clips, clip], warnings: warnings.slice() });
+  }
+}
+
 export async function processProject(job, store, session, update) {
   const { options } = job;
-  const frame = exportFrame(options);
+  const mode = job.monitor?.mode === 'full' ? 'replay' : options.mode;
   const { signal } = session;
   const tools = await toolsStatus();
   if (!tools.ffmpeg) throw new Error('FFmpeg is not installed. Follow the Setup guide and restart the server.');
@@ -321,7 +419,7 @@ export async function processProject(job, store, session, update) {
   const root = jobDir(job.id);
   const scratch = join(root, 'work');
   await mkdir(scratch, { recursive: true, mode: 0o700 });
-  let path, duration, meta, probed, audio = [], transcript = { cues: [], label: 'Off' }, isLive = false, lastProgress = 0;
+  let path, duration, meta, audio = [], transcript = { cues: [], label: 'Off' }, lastProgress = 0;
   const progress = (value, extra = {}) => {
     if (value < (job.progress || 0)) value = job.progress;
     if (Date.now() - lastProgress < 900) return;
@@ -339,9 +437,10 @@ export async function processProject(job, store, session, update) {
       update({ status: 'fetching', progress: 4, detail: 'Checking this link and detecting the source type.' });
       checkReplayDeadline(job);
       try { meta = await getMetadata(options.url, signal); }
-      catch (error) { if (!(error instanceof ReplayProcessing) || options.mode === 'live') throw error; }
+      catch (error) { if (!(error instanceof ReplayProcessing) || mode === 'live') throw error; }
       signal.throwIfAborted();
-      const waiting = meta ? replayState(meta, options.mode) : 'processing';
+      if (job.monitor?.mode === 'full' && meta && meta.id !== options.id) throw new Error('YouTube returned a different broadcast. Full mode will not analyze a different stream.');
+      const waiting = meta ? replayState(meta, mode) : 'processing';
       if (waiting) {
         // Freeze the video ID before waiting. /@channel/live can change to a
         // different broadcast after the current one ends.
@@ -353,113 +452,53 @@ export async function processProject(job, store, session, update) {
         update({ ...planReplayCheck(job, waiting), title, creator, options: { ...options, ...source } });
         return;
       }
-      isLive = meta.is_live === true || meta.live_status === 'is_live';
+      const isLive = meta.is_live === true || meta.live_status === 'is_live';
       if (meta.live_status === 'is_upcoming') throw new Error('This livestream has not started yet. Use Live replay to wait, or try again once it is live.');
       if (meta.live_status === 'post_live') throw new Error('The broadcast ended. Use Live replay to wait for the recording.');
-      if (!isLive && options.mode === 'live') throw new Error('This source is not currently live. Use Auto-detect, Recorded video or Live replay.');
-      if (isLive && options.mode === 'recorded') throw new Error('This source is still live. Switch to Auto-detect or Live monitor.');
+      if (!isLive && mode === 'live') throw new Error('This source is not currently live. Use Auto-detect, Recorded video or Live replay.');
+      if (isLive && mode === 'recorded') throw new Error('This source is still live. Switch to Auto-detect or Live monitor.');
       if (!isLive && Number(meta.duration) > maxSourceSeconds) throw new Error(`This source exceeds the ${Math.round(maxSourceSeconds / 60)}-minute workspace limit.`);
       const isReplay = Boolean(job.replayWait || meta.was_live || meta.live_status === 'was_live');
+      if (job.monitor?.mode === 'full' && !isReplay) throw new Error('YouTube did not identify this video as the same broadcast’s replay.');
       const common = { title: String(meta.title).trim().slice(0, 180), creator: String(meta.channel || meta.uploader || '').slice(0, 90), sourceKind: isLive ? 'live' : isReplay ? 'replay' : 'video', replayWait: null };
       if (isLive) {
-        update({ ...common, status: 'capturing', progress: 9, capturedSeconds: 0, captureLimitSeconds: Math.min(options.liveMinutes * 60, maxSourceSeconds), detail: `Recording up to ${Math.min(options.liveMinutes, maxSourceSeconds / 60)} min from the live edge.` });
-        const capture = await captureLive(meta, options, scratch, session, progress, update);
-        ({ path, duration, profile: probed } = capture);
-        update({ liveInput: capture.inputFormat });
-      } else {
-        update({ ...common, status: 'downloading', progress: 9, detail: 'Downloading an authorized copy of the source.' });
-        path = await downloadSource(options, scratch, signal, progress);
+        let source;
+        try { source = youtubeSource(`https://www.youtube.com/watch?v=${meta.id || options.id || ''}`); }
+        catch { throw new Error('Use the individual YouTube livestream link so Curiousity can follow the same broadcast.'); }
+        if (options.id && source.id !== options.id) throw new Error('YouTube returned a different broadcast. Use the individual livestream link.');
+        update({ ...common, options: { ...options, ...source }, status: 'capturing', progress: 9, capturedSeconds: 0, captureLimitSeconds: Math.min(options.liveMinutes * 60, maxSourceSeconds), detail: 'Starting the live recording.',
+          monitor: { open: true, mode: 'analytics', phase: 'recording', seconds: 0, canAnalyze: false, busy: false } });
+        await runLiveMonitor({ job, meta, scratch, session, update,
+          record: (optionsForCapture) => captureLive(meta, job.options, scratch, optionsForCapture, progress, update),
+          analyze: async ({ source: path, dir, offset, depth, limit, reaction, signal }) => {
+            const profile = await audioProfile(path, signal);
+            const duration = Math.min(depth, profile.duration || depth);
+            if (duration < 6) return 'Wait for more playable footage.';
+            const transcript = await findTranscript({ meta, options, source: path, scratch: dir, store, tools, signal, audio: profile.audio });
+            return analyzeMedia({ job, store, options, root, scratch: dir, signal, update, path, meta, duration, audio: profile.audio, transcript, tools, isLive: true, offset, batchLimit: limit, reaction });
+          },
+        });
+        if (job.monitor.open && job.monitor.phase === 'switching') {
+          signal.throwIfAborted();
+          update({ status: 'queued', progress: 0, detail: 'Checking for the same broadcast’s replay.', monitor: { ...job.monitor, phase: 'replay', busy: false, canAnalyze: false } });
+        }
+        return;
       }
+      update({ ...common, status: 'downloading', progress: 9, detail: 'Downloading an authorized copy of the source.' });
+      path = await downloadSource(options, scratch, signal, progress);
       update({ status: 'analyzing', progress: 41, detail: 'Measuring audio activity and looking for captions.' });
-      const prof = probed || await audioProfile(path, signal);
+      const prof = await audioProfile(path, signal);
       audio = prof.audio;
-      duration = isLive ? duration : prof.duration || Number(meta.duration);
+      duration = prof.duration || Number(meta.duration);
       if (!Number.isFinite(duration) || duration < 6) throw new Error('At least six seconds of playable video are needed to make a clip.');
       if (duration > maxSourceSeconds + 10) throw new Error('This source exceeded the configured duration limit.');
       update({ duration, progress: 48, detail: 'Reading the source transcript or transcribing speech.' });
       transcript = await findTranscript({ meta, options, source: path, scratch, store, tools, signal, audio });
     }
-    const warnings = [];
-    if (isLive && !audio.length) warnings.push('The live window had no audio track. Clips can still be exported without spoken captions.');
-    const heatmap = !isLive && Array.isArray(meta?.heatmap) ? meta.heatmap : [];
-    const candidates = buildCandidates({ duration, count: options.count, cues: transcript.cues, audio, heatmap });
-    const automatic = options.count === 'auto';
-    const limit = automatic ? maxClips : options.count;
-    const selection = options.aiProfile || 'workspace';
-    const providerId = Object.hasOwn(job, 'chatProviderId') ? job.chatProviderId : options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
-    const savedProfile = providerId ? store.chatProfile(providerId) : null;
-    const profile = savedProfile?.model ? { ...savedProfile } : null;
-    if (providerId && !profile) warnings.push('The selected AI profile or chat model is no longer available. Local scoring was used.');
-    let engine = 'Local analysis', ordered = candidates;
-    if (profile?.model && candidates.some((m) => m.excerpt)) {
-      const eligible = candidates.filter((m) => m.excerpt.length > 15);
-      const pool = [...new Set([...pickMoments(eligible, Math.max(12, limit)), ...eligible])].slice(0, Math.min(30, Math.max(14, limit * 2)));
-      if (pool.length) {
-        update({ progress: 57, detail: `Ranking candidate moments with ${profile.name}.` });
-        try {
-          const ranking = await rankWithProvider(profile, store, pool, signal);
-          ordered = candidates.map((item) => {
-            const ai = ranking.get(item.id);
-            return ai ? { ...item, score: Math.round(ai.score * 0.7 + item.score * 0.3), title: ai.title || item.title, reason: ai.reason || item.reason, ai: true } : item;
-          }).sort((a, b) => Number(Boolean(b.ai)) - Number(Boolean(a.ai)) || b.score - a.score);
-          engine = profile.name;
-        } catch (error) {
-          if (signal.aborted) throw signal.reason;
-          warnings.push('The selected AI model did not return a usable ranking. Local scoring was used instead.');
-        }
-      }
-    } else if (profile?.model) warnings.push('The selected AI model needs a transcript; this source was scored locally.');
-    const { picks, fallback } = automatic ? pickAutoMoments(ordered, limit) : { picks: pickMoments(ordered, limit), fallback: false };
-    if (!picks.length) throw new Error('No playable moment could be found in the source.');
-    if (automatic) {
-      update({ autoSelection: { count: picks.length, fallback }, progress: 59, detail: `Auto selected ${picks.length} ${picks.length === 1 ? 'clip' : 'clips'} from this source.` });
-    } else if (picks.length < limit) warnings.push(`Found ${picks.length} distinct moments of ${limit} requested. Longer sources can support more non-overlapping clips.`);
-    const originalRows = options.captions ? picks.map((moment) => clipCues(transcript.cues, moment.start, moment.end)) : picks.map(() => []);
-    const asTracks = (result) => result && { tracks: picks.map((moment) => clipCues(result.cues, moment.start, moment.end)), label: result.label };
-    let localized = { tracks: originalRows, language: transcript.language || null };
-    const target = options.captionLanguage;
-    if (options.captions && target && target !== 'source' && (target !== transcript.language || target === romanUrdu)) {
-      update({ progress: 60, detail: `Preparing ${languageLabel(target)} captions.` });
-      localized = await localizeClips({ original: originalRows, sourceLanguage: transcript.language, target, provider: providerId && store.chatProfile(providerId) ? profile : null, store, signal,
-        tryTrack: async (language) => {
-          if (options.demo) {
-            const translations = JSON.parse(await readFile(join(ROOT, 'server', 'assets', 'demo-translations.json'), 'utf8'));
-            const translated = translations[language];
-            return translated?.length === transcript.cues.length ? asTracks({ cues: transcript.cues.map((row, i) => ({ ...row, text: translated[i] })), label: 'Bundled translation' }) : null;
-          }
-          return isLive ? null : asTracks(await downloadCaptions(meta, options.url, scratch, signal, language));
-        },
-        tryEnglish: path && tools.whisper && audio.some((db) => db > -58) ? async () => {
-          try { return asTracks(await runWhisper(path, signal, true)); }
-          catch (error) { if (signal.aborted) throw signal.reason; return null; }
-        } : null,
-      });
-    }
-    const anyCaptions = localized.tracks.some((rows) => rows.length);
-    if (localized.warning) warnings.push(options.demo ? 'The demo includes English, Urdu, Roman Urdu and Spanish tracks. Original English captions were used.' : localized.warning);
-    if (options.captions && !anyCaptions && !localized.warning && (!isLive || audio.length)) warnings.push(transcript.warning || 'No usable spoken captions were available for these clips.');
-    if (anyCaptions && !tools.subtitles) warnings.push('This FFmpeg build does not support burned subtitles. SRT files are still available.');
-    if (anyCaptions && tools.subtitles) await cp(captionFonts, join(scratch, 'caption-fonts'), { recursive: true });
-    const signals = [transcript.cues.length && 'Transcript', audio.some((db) => db > -58) && 'Audio activity', heatmap.length && 'Replay heatmap'].filter(Boolean);
-    update({ status: 'rendering', progress: 62, engine, signals, frame, captionsSource: localized.label || transcript.label, warnings, detail: `Rendering 1 of ${picks.length} clips in ${frame.ratio}.` });
-    const clips = [];
-    const fontWarning = 'Some caption characters could not be drawn. Install fonts for the caption language and rerun the project. The SRT contains the full text.';
-    for (const [index, moment] of picks.entries()) {
-      if (signal.aborted) throw signal.reason;
-      const id = `clip-${index + 1}`;
-      const rows = localized.tracks[index];
-      update({ detail: `Rendering ${index + 1} of ${picks.length} clips in ${frame.ratio}.`, progress: 62 + Math.floor(index / picks.length * 35) });
-      let rendered;
-      try { rendered = await renderClip({ clip: moment, path, options, rows, language: localized.language, frame, dir: join(root, id), scratch, signal, tools }); }
-      catch (error) { if (signal.aborted) throw signal.reason; throw new Error('FFmpeg could not render a clip. Check free disk space and that FFmpeg includes libx264 and libass.'); }
-      const { excerpt, ai, ...fields } = moment;
-      const hashtags = suggestHashtags({ choice: options.hashtagLanguage, transcriptLanguage: transcript.language || sourceLanguage(meta), localizedLanguage: localized.language, excerpt, translated: rows.map((row) => row.text).join(' '), live: isLive });
-      const { missingGlyphs, ...assets } = rendered;
-      if (missingGlyphs && !warnings.includes(fontWarning)) warnings.push(fontWarning);
-      clips.push({ ...fields, id, duration: Number((moment.end - moment.start).toFixed(2)), captionLanguage: rows.length ? localized.language : null, ...hashtags, ...assets });
-      update({ clips: clips.slice(), warnings: warnings.slice() });
-    }
-    update({ status: 'ready', progress: 100, detail: `${clips.length} ${clips.length === 1 ? 'clip is' : 'clips are'} ready for review.`, finishedAt: new Date().toISOString() });
+    await analyzeMedia({ job, store, options, root, scratch, signal, update, path, meta, duration, audio, transcript, tools });
+    const count = job.clips.length;
+    const monitor = job.monitor && { ...job.monitor, phase: 'idle', busy: false, analysis: 'Same broadcast replay analyzed from the beginning.' };
+    update({ status: 'ready', progress: 100, detail: `${count} ${count === 1 ? 'clip is' : 'clips are'} ready for review.`, finishedAt: new Date().toISOString(), ...(monitor && { monitor }) });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

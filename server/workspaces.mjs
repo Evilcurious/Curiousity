@@ -18,9 +18,9 @@ export function repairWorkspace(account) {
 }
 
 export function sharedProviders(store, account) {
-  if (!canUsePremium(account)) return [];
+  const paid = canUsePremium(account);
   return store.state.users.filter((user) => user.role === 'admin' && user !== account)
-    .flatMap((user) => user.workspace.providers.filter((profile) => profile.premiumShared && profile.model));
+    .flatMap((user) => user.workspace.providers.filter((profile) => profile.premiumShared && profile.model && (paid || profile.freeShared)));
 }
 
 export function scopedStore(store, user) {

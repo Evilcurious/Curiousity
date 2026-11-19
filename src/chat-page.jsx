@@ -56,8 +56,8 @@ function Conversation({ profile, profiles, onSelect, onFinder }) {
   const busy = Boolean(pending);
   return <section className="panel chat-panel" aria-label="Model chat">
     <header className="chat-toolbar">
-      <Glyph icon={Cpu}/><div className="chat-model-label"><p className="eyebrow">PERSONAL PROFILE</p><strong title={profile.model}>{profile.model}</strong></div>
-      <Select aria-label="Chat model profile" title="Switching profiles starts a new conversation" disabled={busy} value={profile.id} onChange={(event) => onSelect(event.target.value)}>{profiles.map((item) => <option value={item.id} key={item.id}>{item.name} · {providerCatalog[item.type]?.name || item.type}{item.id !== profile.id ? ` · ${item.model}` : ''}</option>)}</Select>
+      <Glyph icon={Cpu}/><div className="chat-model-label"><p className="eyebrow">{profile.managed ? 'SHARED MODEL' : 'PERSONAL PROFILE'}</p><strong title={profile.model}>{profile.model}</strong></div>
+      <Select aria-label="Chat model profile" title="Switching profiles starts a new conversation" disabled={busy} value={profile.id} onChange={(event) => onSelect(event.target.value)}>{profiles.map((item) => <option value={item.id} key={item.id}>{item.name} · {providerCatalog[item.type]?.name || item.type}{item.managed ? ' · Shared' : ''}{item.id !== profile.id ? ` · ${item.model}` : ''}</option>)}</Select>
       <Button icon={Plus} disabled={busy || (!history.length && !draft)} onClick={() => setReset(true)}>New chat</Button>
     </header>
 
@@ -82,7 +82,7 @@ function Conversation({ profile, profiles, onSelect, onFinder }) {
         }}/>
         <div className="chat-send-row"><span>{draft.length >= chatLimits.user - 500 ? `${draft.length.toLocaleString()} / ${chatLimits.user.toLocaleString()}` : 'Shift + Enter for a new line'}</span>{busy ? <Button icon={Square} onClick={() => request.current?.abort()}>Stop</Button> : <Button type="submit" tone="primary" icon={Send} disabled={!draft.trim()}>Send</Button>}</div>
       </div>
-      <p className="chat-disclaimer"><LockKeyhole size={13}/> Recent messages go to this provider. Chat has no access to MCP tools or your projects.</p>
+      <p className="chat-disclaimer"><LockKeyhole size={13}/> Recent messages go to this provider. {profile.managed ? 'Replies use your shared AI message allowance.' : 'Your personal key does not use shared AI messages.'}</p>
     </form>
     {reset && <Confirm title="Start a new chat?" message="This removes the current conversation and draft from this tab." label="Start new chat" onClose={() => setReset(false)} onConfirm={() => { setHistory([]); setDraft(''); setError(''); setReset(false); }} danger={false}/>}
   </section>;
@@ -96,13 +96,13 @@ const chatTools = [
 
 export default function ChatPage({ workspace, onUseSource }) {
   const [selection, setSelection] = useState(''), [tool, setTool] = useState('conversation'), [prefill, setPrefill] = useState(null);
-  const profiles = (workspace?.providers || []).filter((profile) => profile.model);
+  const profiles = [...(workspace?.providers || []), ...(workspace?.sharedProviders || [])].filter((profile) => profile.model);
   const profile = profiles.find((item) => item.id === selection) || profiles.find((item) => item.id === workspace?.activeProviderId) || profiles[0];
   const searchEnabled = workspace?.discoveryEnabled !== false;
   useEffect(() => { if (profile && profile.id !== selection) setSelection(profile.id); }, [profile?.id, selection]);
   function openFinder(query) { setPrefill({ query }); setTool('finder'); }
   return <div className="view-enter chat-workspace">
-    <PageHeading label="WORKSPACE / PERSONAL AI" title="Chat" subtitle="Talk with a saved model or use Reach and Finder to search public sources."><ActionLink icon={Cpu} href="#/settings/providers">Manage providers</ActionLink></PageHeading>
+    <PageHeading label="WORKSPACE / AI" title="Chat" subtitle="Talk with a saved model or use Reach and Finder to search public sources."><ActionLink icon={Cpu} href="#/settings/providers">Manage providers</ActionLink></PageHeading>
     <div className="chat-tool-strip" role="group" aria-label="Chat tools">
       {chatTools.map(({ id, icon: Icon, name }) => <button key={id} type="button" aria-pressed={tool === id} aria-controls={`chat-tool-${id}`} onClick={() => setTool(id)}><Icon size={16}/>{name}</button>)}
     </div>
@@ -112,7 +112,7 @@ export default function ChatPage({ workspace, onUseSource }) {
       </section>}
       {profile && <p className="privacy-note chat-privacy"><LockKeyhole size={15}/> Conversations stay in this tab until you reload, sign out or switch profiles. Your provider’s data and billing policies still apply.</p>}
     </div>
-    <div id="chat-tool-reach" hidden={tool !== 'reach'}><DiscoveryPane kind="reach" enabled={searchEnabled} profile={profile} onUseSource={onUseSource}/></div>
-    <div id="chat-tool-finder" hidden={tool !== 'finder'}><DiscoveryPane kind="finder" enabled={searchEnabled} profile={profile} prefill={prefill}/></div>
+    <div id="chat-tool-reach" hidden={tool !== 'reach'}><DiscoveryPane kind="reach" enabled={searchEnabled} profile={profile?.managed ? null : profile} onUseSource={onUseSource}/></div>
+    <div id="chat-tool-finder" hidden={tool !== 'finder'}><DiscoveryPane kind="finder" enabled={searchEnabled} profile={profile?.managed ? null : profile} prefill={prefill}/></div>
   </div>;
 }

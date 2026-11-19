@@ -50,10 +50,10 @@
             <h2>1. Information we handle</h2>
             <p>This policy applies to the Curiousity workspace at <strong>ai.devzard.online</strong> and is provided by the operator of that workspace. It does not govern the websites or services you choose to connect or visit.</p>
             <ul>
-              <li><strong>Account information:</strong> Your email address, account ID, salted password hash, account role, access settings, preferences, and session records. We do not store your password in plaintext.</li>
+              <li><strong>Account information:</strong> Your email address, account ID, salted password hash, account role, membership plan and expiration, usage counters and limits, settings, and session records. We do not store your password in plaintext.</li>
               <li><strong>Projects and media:</strong> Source links, uploaded or captured video, project settings, audio and caption data used for processing, and exports such as MP4s and subtitle files. Device caption projects keep the original video to allow re-styling until you delete the project.</li>
               <li><strong>Connected services:</strong> Provider and integration settings, which may include endpoint addresses, model names, API credentials, account identifiers, permissions, and delivery status. Saved secrets and OAuth tokens stored by Curiousity are encrypted at rest.</li>
-              <li><strong>Technical information:</strong> The workspace processes request information such as IP addresses to operate the service and limit abuse. The host or reverse proxy may keep access or error logs.</li>
+              <li><strong>Technical information:</strong> The workspace processes request information such as IP addresses to operate the service and limit abuse. We keep the IP address and time of the last successful sign-in with the account for the administrator to view, replacing it at the next sign-in. The host or reverse proxy may keep access or error logs.</li>
             </ul>
           </section>
           <section id="use">
@@ -64,6 +64,7 @@
             <h2>3. AI, search, and MCP</h2>
             <ul>
               <li><strong>AI models:</strong> A chosen provider receives the data needed for the feature you run. Chat sends recent messages to your selected model and keeps the conversation in the current tab, not in a server-side conversation history. Remote transcription sends audio; optional ranking or translation sends relevant excerpts or captions. Local processing does not send those inputs to a remote AI provider.</li>
+              <li><strong>Live Monitor:</strong> When public chat is available, Curiousity reads it to measure activity. The raw feed can be buffered temporarily while the monitor is running and is removed when the collector stops. The project can retain aggregate counts, not chat authors or message text. Auto sends activity counts, approximate timing, and any useful transcript excerpt to the model you choose.</li>
               <li><strong>Reach and Finder:</strong> The search query and filters, including any location you enter, go to the configured search provider, such as Exa or the YouTube Data API. With AI review on, the selected model also receives the search criteria and brief public evidence. It does not receive your Chat history or projects. The server does not retain search history or generated workbooks.</li>
               <li><strong>MCP connections:</strong> When you approve a tool call, the chosen server receives its arguments and the credential needed to authenticate you. Avoid sending sensitive information to a provider you do not trust. Connected providers handle received data under their own policies.</li>
             </ul>
@@ -80,12 +81,13 @@
           </section>
           <section id="delivery">
             <h2>5. Other delivery services</h2>
-            <p><strong>TikTok:</strong> If you authorize TikTok, Curiousity receives the connected account’s identifier and display name, and stores encrypted tokens. Confirmed uploads send selected media to your TikTok inbox so you can finish publishing there. Curiousity retains delivery status.</p>
+            <p><strong>TikTok:</strong> If you authorize TikTok, Curiousity receives each connected account’s identifier and display name, and stores encrypted tokens. You choose the receiving account when reviewing a draft. Confirmed uploads send selected media to your TikTok inbox so you can finish publishing there. Curiousity retains delivery status. Disconnect a creator to remove the local tokens for that account.</p>
+            <p><strong>WhatsApp:</strong> If you select a paid plan, its link opens WhatsApp with the plan name in a suggested message. Curiousity does not send your account details or collect payment in the app. Messages or payment details you share there are handled outside Curiousity under the provider’s and recipient’s practices.</p>
             <p><strong>Buffer:</strong> When you approve a draft, Buffer receives the draft text, destination and media details, and fetches the attached media from the supplied link. Anyone with a Curiousity Buffer media link can download that clip while the link is valid, for up to three days or until the project is deleted.</p>
           </section>
           <section id="sharing">
             <h2>6. Sharing and retention</h2>
-            <p>Projects and connections are private to your account by default. If you share a project’s exports with the Clip Library, signed-in members can see the shared exports and their listing details and save copies. If you approve delivery to another service, that service receives the data needed for the delivery. Workspace operators and hosting providers may access data as needed to operate or secure the service. We may also disclose information when legally required.</p>
+            <p>Projects and connections are private to your account by default. If you share a project’s exports with the Clip Library, signed-in members can see the shared exports and their listing details and save copies. If you approve delivery to another service, that service receives the data needed for the delivery. Workspace administrators manage account emails, reset credentials and adjust plan limits. Workspace operators and hosting providers may access data as needed to operate or secure the service. We may also disclose information when legally required.</p>
             <p>Account settings and projects are retained as needed to provide the workspace. Deleting a project removes its project data and files from active storage and invalidates its Curiousity media links. It does not remove copies saved by other members, downloaded files, or uploads and drafts already held by another service. Host backups or logs may retain data for longer under the operator’s retention practices.</p>
           </section>
           <section id="cookies">

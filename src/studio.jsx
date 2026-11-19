@@ -8,7 +8,7 @@ import CaptionAppearance from './caption-appearance.jsx';
 
 const demoTitle = 'The anatomy of a great hook';
 const presets = [1, 3, 4, 5, 10];
-const initialFields = { url: '', count: 3, custom: '6', mode: 'auto', liveMinutes: 2, captions: true, tiktok: false, platform: 'universal', ratioMode: 'preset', customRatio: '3:2', captionLanguage: 'source', hashtagLanguage: 'source', captionStyle: defaultCaptionStyle, aiProfile: 'workspace' };
+const initialFields = { url: '', count: 3, custom: '6', mode: 'auto', liveMinutes: 2, customLiveMinutes: '45', captions: true, tiktok: false, platform: 'universal', ratioMode: 'preset', customRatio: '3:2', captionLanguage: 'source', hashtagLanguage: 'source', captionStyle: defaultCaptionStyle, aiProfile: 'workspace' };
 
 export function ProjectRow({ project }) {
   const first = project.clips[0];
@@ -18,7 +18,7 @@ export function ProjectRow({ project }) {
       {first && <span className="thumb-time">{timecode(first.duration)}</span>}
     </div>
     <div className="project-row-text"><div className="project-row-title"><h3>{project.title}</h3>{project.options.demo && <span className="tag tag-demo">Demo</span>}</div><p>{SHORT_DATE.format(new Date(project.createdAt))}<span>·</span>{project.clips.length ? `${project.clips.length} ${project.clips.length === 1 ? 'clip' : 'clips'}` : project.sourceKind === 'shared' ? 'Saved clip' : project.sourceKind === 'live' ? 'Livestream' : 'Clipping project'}</p></div>
-    <JobBadge state={project.status}/><ChevronRight className="row-arrow" size={17}/>
+    <JobBadge state={project.monitor?.open && project.status === 'ready' ? 'monitorOpen' : project.status}/><ChevronRight className="row-arrow" size={17}/>
   </a>;
 }
 export function DemoRow({ onDemo, busy }) {
@@ -63,6 +63,11 @@ export default function Studio({ user, workspace, projects, projectsError, creat
   const profileLabel = (profile) => profileNameCount.get(profile.name) > 1 ? `${profile.name} · ${profile.model} · ${profile.id.slice(-6)}` : profile.name;
   const tiktokConnected = Boolean(workspace?.tiktok.connected);
   const count = fields.count;
+  const hasLiveDuration = ['auto', 'live'].includes(fields.mode);
+  const maxLiveMinutes = workspace?.maxLiveMinutes || 180;
+  const durations = (workspace?.liveLimits || [2, 5, 10, 15, 30]).filter((n) => n <= maxLiveMinutes);
+  const duration = Math.min(fields.liveMinutes, maxLiveMinutes);
+  const durationSelect = fields.liveMinutes === 'custom' ? 'custom' : durations.includes(duration) ? duration : 'custom';
   const maxClips = workspace?.maxClips || 20;
   const platform = platforms[fields.platform];
   const ratio = fields.ratioMode === 'custom' ? fields.customRatio : fields.ratioMode === 'preset' ? platform.ratio : fields.ratioMode;
@@ -74,10 +79,12 @@ export default function Studio({ user, workspace, projects, projectsError, creat
     const resolved = count === 'auto' ? 'auto' : Number(count === 'custom' ? fields.custom : count);
     if (resolved !== 'auto' && (!Number.isInteger(resolved) || resolved < 1 || resolved > maxClips)) { setError(`Enter a whole number from 1 to ${maxClips}.`); customInput.current?.focus(); return; }
     if (!frame) { setError('Enter a custom ratio like 3:2, between 1:4 and 4:1 (whole numbers from 1 to 100).'); ratioInput.current?.focus(); return; }
+    const liveMinutes = hasLiveDuration && !demo ? fields.liveMinutes === 'custom' ? Number(fields.customLiveMinutes) : duration : Math.min(2, maxLiveMinutes);
+    if (!Number.isInteger(liveMinutes) || liveMinutes < 1 || liveMinutes > maxLiveMinutes) { setError(`Enter a whole number of live minutes from 1 to ${maxLiveMinutes}.`); return; }
     setBusy(demo ? 'demo' : 'submit');
     try {
-      const { custom, ratioMode, customRatio, ...options } = fields;
-      await createProject({ ...options, url: fields.url.trim(), demo, count: resolved, aiProfile: demo ? 'local' : aiProfile, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
+      const { custom, ratioMode, customRatio, customLiveMinutes, ...options } = fields;
+      await createProject({ ...options, url: fields.url.trim(), demo, liveMinutes, count: resolved, aiProfile: demo ? 'local' : aiProfile, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
     } catch (err) { setError(err.message); notify(err.message, 'error'); }
     finally { setBusy(''); }
   }
@@ -130,7 +137,7 @@ export default function Studio({ user, workspace, projects, projectsError, creat
           </div>
           {fields.mode === 'replay' && <p className="count-note">Use the individual YouTube stream link. If the broadcast is still live or processing, Curiousity waits up to {workspace?.replayWaitMinutes || 360} minutes for its replay and then generates clips.</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
-          <button type="submit" className="generate-button" disabled={Boolean(busy)}>{busy === 'submit' ? <LoaderCircle size={18} className="spin"/> : <Sparkles size={18} strokeWidth={2}/>}{busy === 'submit' ? 'Starting project…' : 'Generate clips'}<ArrowRight className="generate-arrow" size={18}/></button>
+          <button type="submit" className="generate-button" disabled={Boolean(busy)}>{busy === 'submit' ? <LoaderCircle size={18} className="spin"/> : <Sparkles size={18} strokeWidth={2}/>}{busy === 'submit' ? 'Starting project…' : fields.mode === 'live' ? 'Start live monitor' : 'Generate clips'}<ArrowRight className="generate-arrow" size={18}/></button>
           <p className="rights-note"><ShieldCheck size={14}/> Use content you own or have permission to clip.</p>
         </form>
       </section>
@@ -140,15 +147,17 @@ export default function Studio({ user, workspace, projects, projectsError, creat
           <Setting icon={Radio} title="Source mode" detail={fields.mode === 'live' ? 'Record from the live edge' : fields.mode === 'recorded' ? 'Use a finished recording' : fields.mode === 'replay' ? 'Wait for a playable recording' : 'Detect videos & livestreams'}>
             <div className="select-wrap compact"><select value={fields.mode} aria-label="Source mode" onChange={(event) => change('mode', event.target.value)}><option value="auto">Auto-detect</option><option value="recorded">Recorded video</option><option value="live">Live monitor</option><option value="replay">Live replay</option></select><ChevronDown size={13}/></div>
           </Setting>
-          {['auto', 'live'].includes(fields.mode) && <Setting icon={AudioLines} title="Live capture limit" detail="Only applies to active streams"><div className="select-wrap compact"><select aria-label="Capture limit" value={fields.liveMinutes} onChange={(event) => change('liveMinutes', Number(event.target.value))}>{(workspace?.liveLimits || [2, 5, 10, 15, 30]).map((n) => <option key={n} value={n}>{n} min</option>)}</select><ChevronDown size={13}/></div></Setting>}
+          {hasLiveDuration && <><Setting icon={AudioLines} title="Live capture limit" detail="Only applies to active streams"><OutputSelect compact aria-label="Capture limit" value={durationSelect} onChange={(event) => change('liveMinutes', event.target.value === 'custom' ? 'custom' : Number(event.target.value))}>{durations.map((n) => <option key={n} value={n}>{n} min</option>)}<option value="custom">Custom</option></OutputSelect></Setting>
+            {durationSelect === 'custom' && <div className="inline-custom live-duration"><label className="field-label" htmlFor="custom-live-minutes">Custom live minutes</label><input id="custom-live-minutes" type="number" min="1" max={maxLiveMinutes} step="1" value={fields.liveMinutes === 'custom' ? fields.customLiveMinutes : duration} onChange={(event) => { setError(''); setFields((previous) => ({ ...previous, liveMinutes: 'custom', customLiveMinutes: event.target.value })); }}/><span>1–{maxLiveMinutes} min</span></div>}
+          </>}
           <Setting icon={Captions} title="Auto captions" detail="Burn subtitles into clips"><Switch label="Auto captions" enabled={fields.captions} onChange={(value) => change('captions', value)}/></Setting>
           {fields.captions && <Setting icon={Languages} title="Caption language" detail={fields.captionLanguage === romanUrdu ? 'Urdu written in Latin letters' : 'Original or translated'}><LanguageSelect kind="Caption" value={fields.captionLanguage} onChange={(value) => change('captionLanguage', value)}/></Setting>}
           {fields.captions && <Setting icon={Type} title="Caption style" detail={captionStyleLabel(captionStyle)}><Button aria-label="Customize caption style" className="setting-button" onClick={() => setStyleOpen(true)}>Customize</Button></Setting>}
           <Setting icon={Hash} title="Hashtag language" detail="Suggestions, separate from captions"><LanguageSelect kind="Hashtag" value={fields.hashtagLanguage} onChange={(value) => change('hashtagLanguage', value)}/></Setting>
           <Setting icon={TikTokIcon} title="Send to TikTok" detail={tiktokConnected ? 'Preselect clips for draft review' : 'Account not connected'}><Switch label="Send to TikTok" enabled={tiktokConnected && fields.tiktok} onChange={(value) => tiktokConnected ? change('tiktok', value) : setConnect(true)}/></Setting>
-          <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Premium AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Premium</option>)}</optgroup>}</OutputSelect></Setting>
+          <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Shared AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Shared</option>)}</optgroup>}</OutputSelect></Setting>
         </div>
-        {user?.role === 'member' && !user.premium && <a className="studio-premium" href="#/settings/account"><Crown size={16}/><span>{user.premiumRequested ? 'Premium request pending' : 'Need an AI model? Request premium'}</span><ChevronRight size={14}/></a>}
+        {user?.role === 'member' && user.plan?.id === 'free' && <a className="studio-premium" href="#/settings/account?plans=1"><Crown size={16}/><span>Activate Premium</span><ChevronRight size={14}/></a>}
       </section>
     </div>
 

@@ -59,9 +59,10 @@ function mediaInput(url, kind, headers) {
     ...(kind === 'hls' ? ['-live_start_index', '-2', '-f', 'hls'] : ['-f', 'dash']), '-i', url];
 }
 
-export function liveArgs(plan, seconds, destination, maxBytes) {
+export function liveArgs(plan, seconds, destination, maxBytes, segmentList) {
   return ['-hide_banner', '-loglevel', 'error', '-y', ...mediaInput(plan.url, plan.kind, plan.headers),
     ...(plan.audioUrl ? mediaInput(plan.audioUrl, plan.kind, plan.audioHeaders) : []),
     '-t', String(seconds), '-map', '0:v:0', '-map', plan.audioUrl ? '1:a:0' : plan.silent ? '0:a:0?' : '0:a:0', '-sn', '-dn',
-    ...(maxBytes ? ['-fs', String(Math.floor(maxBytes) + 1)] : []), '-c', 'copy', '-f', 'matroska', '-stats_period', '0.5', '-progress', 'pipe:1', destination];
+    ...(!segmentList && maxBytes ? ['-fs', String(Math.floor(maxBytes) + 1)] : []), '-c', 'copy', '-stats_period', '0.5', '-progress', 'pipe:1',
+    ...(segmentList ? ['-f', 'segment', '-segment_time', '6', '-segment_list_type', 'csv', '-segment_list', segmentList, '-reset_timestamps', '1'] : ['-f', 'matroska']), destination];
 }

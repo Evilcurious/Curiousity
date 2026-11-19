@@ -1,5 +1,6 @@
 import { frameFor, languages, platforms, romanUrdu } from '../shared/exports.mjs';
 import { captionStyleOptions, resolveCaptionStyle } from '../shared/captions.mjs';
+import { maxSourceSeconds } from './store.mjs';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -7,6 +8,7 @@ export class HttpError extends Error {
 
 export const maxClips = 20;
 export const liveLimits = [2, 5, 10, 15, 30];
+export const maxLiveMinutes = Math.floor(maxSourceSeconds / 60);
 const videoId = /^[a-zA-Z0-9_-]{11}$/;
 
 export function captionStyleInput(style) {
@@ -44,7 +46,9 @@ export function jobOptions(body = {}) {
   const count = body.count === 'auto' ? 'auto' : ['string', 'number'].includes(typeof body.count) ? Number(body.count) : NaN;
   if (count !== 'auto' && (!Number.isInteger(count) || count < 1 || count > maxClips)) throw new HttpError(400, `Choose Auto or enter a clip count from 1 to ${maxClips}.`);
   const mode = ['auto', 'recorded', 'live', 'replay'].includes(body.mode) ? body.mode : 'auto';
-  const liveMinutes = liveLimits.includes(Number(body.liveMinutes)) ? Number(body.liveMinutes) : 2;
+  const minutes = ['string', 'number'].includes(typeof body.liveMinutes) ? Number(body.liveMinutes) : NaN;
+  if (body.liveMinutes !== undefined && !liveLimits.includes(minutes) && (!Number.isInteger(minutes) || minutes < 1 || minutes > maxLiveMinutes)) throw new HttpError(400, `Enter a whole number of live minutes from 1 to ${maxLiveMinutes}.`);
+  const liveMinutes = body.liveMinutes === undefined ? Math.min(2, maxLiveMinutes) : Math.min(minutes, maxLiveMinutes);
   const platform = body.platform ?? 'universal';
   if (typeof platform !== 'string' || !Object.hasOwn(platforms, platform)) throw new HttpError(400, 'Choose a supported export platform.');
   const frame = frameFor(body.aspectRatio ?? platforms[platform].ratio);

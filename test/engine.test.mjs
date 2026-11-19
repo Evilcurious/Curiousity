@@ -32,7 +32,7 @@ async function done(request, id) {
 async function waitForCapture(request, id) {
   for (let i = 0; i < 40; i++) {
     const filming = await (await request(`/projects/${id}`)).json();
-    if (filming.status === 'capturing' && filming.capturedSeconds >= 6) return filming;
+    if (filming.status === 'capturing' && filming.monitor?.canAnalyze) return filming;
     assert.notEqual(filming.status, 'failed', filming.error);
     await setTimeout(180);
   }
@@ -246,11 +246,23 @@ test('engine validates and authenticates writes, renders MP4/SRT, and handles re
   assert.match(filming.detail, /separate audio/);
   const finish = await replay.post(`/projects/${liveId}/finish-capture`, {});
   assert.equal(finish.status, 200);
+  let snapshot;
+  for (let trial = 0; trial < 80; trial++) {
+    snapshot = await (await replay.request(`/projects/${liveId}`)).json();
+    if (snapshot.clips.length) break;
+    await setTimeout(150);
+  }
+  assert.equal(snapshot.clips.length, 1, snapshot.monitor?.analysis);
+  assert.equal(snapshot.status, 'capturing');
+  assert.equal(snapshot.monitor.open, true);
+  assert.equal((await replay.put(`/projects/${liveId}/sharing`, { shared: true, consent: true })).status, 409);
+  assert.equal((await replay.post(`/projects/${liveId}/end`, {})).status, 200);
   const window = await done(replay.request, liveId);
   assert.equal(window.status, 'ready', window.error);
   assert.equal(window.sourceKind, 'live');
   assert.equal(window.clips.length, 1);
-  assert.ok(window.duration >= 6 && window.duration <= 14);
+  assert.ok(window.capturedSeconds >= 6 && window.capturedSeconds <= 14);
+  assert.equal(window.monitor.open, false);
   assert.equal(window.liveInput, 'HLS with separate audio');
 
   async function startLive(id, options = {}) {

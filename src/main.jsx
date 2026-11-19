@@ -10,6 +10,8 @@ import '@fontsource/space-grotesk/latin-700.css';
 import '@fontsource/jetbrains-mono/latin-500.css';
 import './styles.css';
 import './workspace.css';
+import './plans-monitor.css';
+import { planLabel } from '../shared/membership.mjs';
 import Studio, { initialFields } from './studio.jsx';
 import { Library, Project } from './projects.jsx';
 import { Integrations, Providers, Setup } from './settings.jsx';
@@ -34,7 +36,7 @@ function readRoute() {
   const [page, id] = raw.split('/');
   const params = new URLSearchParams(query);
   if (page === 'project' && id) return { page, id };
-  if (page === 'settings' || page === 'providers' || page === 'integrations') return { page: 'settings', tab: page === 'settings' ? sections.find((section) => section.id === id)?.id : page, notice: params.get('notice'), preset: params.get('preset') };
+  if (page === 'settings' || page === 'providers' || page === 'integrations') return { page: 'settings', tab: page === 'settings' ? sections.find((section) => section.id === id)?.id : page, notice: params.get('notice'), preset: params.get('preset'), showPlans: params.get('plans') === '1' };
   if (page === 'library') return { page, shared: id === 'shared' };
   return { page: ['setup', 'captions', 'chat'].includes(page) ? page : 'studio' };
 }
@@ -51,7 +53,7 @@ function App() {
     finally { if (!signal?.aborted && version === startupVersion.current) setStarting(false); }
   }, []);
   useEffect(() => { const ctrl = new AbortController(); check(ctrl.signal); return () => ctrl.abort(); }, [check]);
-  useLayoutEffect(() => { applyBrand(session?.branding, session?.user?.theme); }, [session?.branding, session?.user?.theme]);
+  useLayoutEffect(() => { applyBrand(session?.branding); }, [session?.branding]);
   if (starting) return <main className="startup-screen" role="status"><LoaderCircle size={20} className="spin"/> Loading Curiousity…</main>;
   if (!session?.user) return <Access session={session} onSignedIn={(data) => { setAccessNotice(''); setSession(data); }} startupError={startupError} notice={accessNotice} retry={() => check()}/>;
   const id = session.user.id;
@@ -152,7 +154,7 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
     setProjects(currentProjects.current); setProjectsLoaded(true);
   };
   function openProject(project) { updateProject(project); window.location.hash = `#/project/${project.id}`; }
-  async function createProject(options) { openProject(await api('/projects', { method: 'POST', body: options })); }
+  async function createProject(options) { openProject(await api('/projects', { method: 'POST', body: options })); void refresh(); }
   function useDiscoverySource(url, live) {
     setFields((previous) => ({ ...previous, url, mode: live ? 'replay' : 'auto' }));
     window.location.hash = '#/studio';
@@ -169,8 +171,8 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
   function settings() {
     const props = { user, workspace, refresh, notify };
     switch (route.tab) {
-      case 'account': return <AccountSettings user={user} onSession={setSession} notify={notify} signOut={signOut} signingOut={signingOut} onPasswordChanged={onPasswordChanged}/>;
-      case 'appearance': return <Appearance user={user} branding={branding} onSession={setSession} notify={notify}/>;
+      case 'account': return <AccountSettings user={user} workspace={workspace} showPlans={route.showPlans} signOut={signOut} signingOut={signingOut} onPasswordChanged={onPasswordChanged}/>;
+      case 'appearance': return <Appearance user={user} branding={branding}/>;
       case 'admin': return <AdminSettings user={user} branding={branding} onBrand={(next) => setSession({ branding: next })} notify={notify}/>;
       case 'providers': return <Providers {...props}/>;
       case 'integrations': return <Integrations {...props} notice={route.notice}/>;
@@ -188,14 +190,14 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         <div className="nav-group resources"><p className="nav-label">RESOURCES</p>{navItem({ id: 'setup', label: 'Setup Guide', icon: BookOpen })}</div>
       </nav>
       <div className="sidebar-bottom">
-        <a className="instance account-chip" href="#/settings/account" onClick={() => setMenu(false)} title={user.email}><span className="instance-icon">{user.email[0].toUpperCase()}</span><div><strong>{user.email}</strong><span>{user.role === 'admin' ? <><Shield size={11}/> Administrator</> : user.premium ? <><Crown size={11}/> Premium</> : 'Member account'}</span></div><ChevronRight size={14}/></a>
+        <a className="instance account-chip" href="#/settings/account" onClick={() => setMenu(false)} title={user.email}><span className="instance-icon">{user.email[0].toUpperCase()}</span><div><strong>{user.email}</strong><span>{user.role === 'admin' ? <><Shield size={11}/> Administrator</> : user.plan?.id && user.plan.id !== 'free' ? <><Crown size={11}/> {planLabel(user.plan.id)}</> : 'Free plan'}</span></div><ChevronRight size={14}/></a>
         <LegalLinks/>
       </div>
     </aside>
     <div className="main-shell">
       <header className="topbar"><div className="topbar-inner">
         <div className="breadcrumbs"><button type="button" className="icon-button mobile-menu" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="workspace-nav" onClick={() => setMenu(!menu)}>{menu ? <X size={20}/> : <Menu size={20}/>}</button><PanelTop className="breadcrumb-icon" size={17} strokeWidth={1.7}/><a href="#/studio" className="breadcrumb-root">Workspace</a><ChevronRight className="breadcrumb-divider" size={13}/><span>{label}</span></div>
-        <div className="top-actions"><button type="button" className={`engine-pill engine-${online}`} onClick={() => refresh(true)} title="Refresh engine status"><span className="engine-dot"/>{online === 'online' ? 'Engine online' : online === 'checking' ? 'Checking engine' : 'Engine offline'}</button><a href="#/settings/appearance" className="icon-button theme-shortcut" aria-label="Switch theme" title="Switch theme"><Palette size={17}/></a></div>
+        <div className="top-actions"><button type="button" className={`engine-pill engine-${online}`} onClick={() => refresh(true)} title="Refresh engine status"><span className="engine-dot"/>{online === 'online' ? 'Engine online' : online === 'checking' ? 'Checking engine' : 'Engine offline'}</button>{user.role === 'admin' && <a href="#/settings/admin" className="icon-button theme-shortcut" aria-label="Workspace theme" title="Workspace theme"><Palette size={17}/></a>}</div>
       </div></header>
       <main id="main-content" className="workspace-content" tabIndex={-1}>
         {route.page === 'studio' && <Studio user={user} workspace={workspace} projects={projects} projectsError={projectsError} createProject={createProject} notify={notify} fields={fields} setFields={setFields}/>}

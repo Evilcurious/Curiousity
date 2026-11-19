@@ -150,6 +150,8 @@ test('partial bodies stream before completion and are cleaned up after abort; un
   req.destroy();
   await waitFor(liveJobs, (rows) => !rows.length);
   await assert.rejects(stat(path), { code: 'ENOENT' });
+  const empty = await member.request('/captions/upload?name=empty.mp4', { method: 'POST', headers: raw, body: new Uint8Array() });
+  assert.equal(empty.status, 400);
   const playlist = await json(await member.request('/captions/upload?name=disguised.mp4', { method: 'POST', headers: raw, body: '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nhttp://127.0.0.1:80/other.ts\n#EXT-X-ENDLIST\n' }), 202);
   const bad = await status(playlist.id);
   assert.equal(bad.status, 'failed');
@@ -157,8 +159,7 @@ test('partial bodies stream before completion and are cleaned up after abort; un
   assert.equal(bad.videoUrl, null);
   await assert.rejects(stat(join(root, 'projects', bad.id)), { code: 'ENOENT' });
   assert.equal(await readFile(trace, 'utf8'), '');
-  const empty = await member.request('/captions/upload?name=empty.mp4', { method: 'POST', headers: raw, body: new Uint8Array() });
-  assert.equal(empty.status, 400);
+
 });
 
 test('restart removes an unfinished upload but retains source and SRT for interrupted restyling', async (t) => {

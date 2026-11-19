@@ -98,7 +98,7 @@ test('cookie auth, signup validation, per-account integrations and admin-approve
   assert.deepEqual(disabled.sharedProviders, []);
 
   assert.equal(Object.keys(themes).length, 14);
-  assert.equal((await member.put('/account/theme', { theme: 'constructor' })).status, 400);
+  assert.equal((await member.put('/account/theme', { theme: 'constructor' })).status, 403);
   assert.equal((await member.put('/admin/branding', { theme: 'paper' })).status, 403);
   assert.equal((await admin.put('/admin/branding', { theme: 'mint', logo: Buffer.from('<svg></svg>').toString('base64') })).status, 400);
   const branding = await data(await admin.put('/admin/branding', { theme: 'mint', logo: brandPng }));
@@ -107,11 +107,12 @@ test('cookie auth, signup validation, per-account integrations and admin-approve
   assert.match(image.headers.get('content-type'), /^image\/png/);
   assert.equal(Buffer.from(await image.arrayBuffer()).toString('base64'), brandPng);
   assert.deepEqual((await data(await anonymous.request('/auth/session'))).branding, branding);
-  const chosen = await data(await member.put('/account/theme', { theme: 'midnight' }));
-  assert.equal(chosen.user.theme, 'midnight');
-  assert.equal(chosen.branding.theme, 'mint');
-  assert.equal((await data(await other.request('/auth/session'))).user.theme, null);
-  assert.equal((await data(await member.put('/account/theme', { theme: null }))).user.theme, null);
+  assert.equal((await member.put('/account/theme', { theme: 'midnight' })).status, 403);
+  for (const client of [member, other, admin]) {
+    const session = await data(await client.request('/auth/session'));
+    assert.equal(session.user.theme, undefined);
+    assert.equal(session.branding.theme, 'mint');
+  }
   assert.equal((await data(await admin.put('/admin/branding', { theme: 'paper', logo: null }))).logoUrl, null);
   assert.equal((await anonymous.request('/brand/logo')).status, 404);
   const headers = member.getHeaders();
@@ -313,6 +314,9 @@ test('public password requests require a trusted HTTPS connection, including aft
   const viaProxy = await signin(linux, { ...vps, Origin: 'https://alias.example.test' });
   assert.equal(viaProxy.status, 200);
   assert.match(viaProxy.cookie, /; Secure;/);
+  const accountList = await send(linux, '/admin/accounts', { ...vps, Cookie: viaProxy.cookie.split(';', 1)[0] });
+  assert.equal(accountList.status, 200);
+  assert.equal(accountList.data.users[0].lastSignIn.ip, '198.51.100.8');
   for (const invalid of ['', 'http', 'https, http']) {
     const headers = { ...vps, Origin: PUBLIC_ORIGIN, 'X-Forwarded-Proto': invalid };
     const failure = await signin(linux, headers);

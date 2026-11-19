@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { planReplayCheck, replayState, replayWaitMinutes } from '../server/replay.mjs';
 import { ffmpeg, run, toolsStatus } from '../server/tools.mjs';
-import { memberPassword, startEngine } from './helpers/http.mjs';
+import { exampleAdmin, memberPassword, startEngine } from './helpers/http.mjs';
 
 test('replay waiting is bounded and does not change the live edge mode', () => {
   const now = 1_000_000_000;
@@ -34,12 +34,18 @@ test('the queue pins a stream, releases the worker, resumes the wait after resta
   const state = join(root, 'replay-state.json'), trace = join(root, 'replay-trace.jsonl'), data = join(root, 'data');
   const setStates = async (statuses) => { await writeFile(`${state}.next`, JSON.stringify(statuses)); await rename(`${state}.next`, state); };
   await setStates({ WaitReplayA: 'is_live', WaitReplayB: 'post_live_error', WaitReplayD: 'is_upcoming', WaitReplayE: 'private' });
-  const env = { DATA_DIR: data, REPLAY_WAIT_MINUTES: '3', REPLAY_CHECK_SECONDS: '5', FIXTURE_INPUT: source, FIXTURE_REPLAY_STATE: state, FIXTURE_REPLAY_TRACE: trace, YTDLP_BIN: resolve('test/fixtures/ytdlp.mjs') };
+  const env = { DATA_DIR: data, ADMIN_EMAIL: exampleAdmin.email, ADMIN_PASSWORD: exampleAdmin.password, REPLAY_WAIT_MINUTES: '3', REPLAY_CHECK_SECONDS: '5', FIXTURE_INPUT: source, FIXTURE_REPLAY_STATE: state, FIXTURE_REPLAY_TRACE: trace, YTDLP_BIN: resolve('test/fixtures/ytdlp.mjs') };
   const engine = await startEngine(t, { env });
   let viewer = engine.agent();
   const other = engine.agent();
-  assert.equal((await viewer.signup('viewer@example.test')).status, 201);
-  assert.equal((await other.signup('other-viewer@example.test')).status, 201);
+  const admin = engine.agent();
+  assert.equal((await admin.signin()).status, 200);
+  for (const [client, email] of [[viewer, 'viewer@example.test'], [other, 'other-viewer@example.test']]) {
+    const signup = await client.signup(email);
+    assert.equal(signup.status, 201);
+    const { user } = await signup.json();
+    assert.equal((await admin.put(`/admin/accounts/${user.id}/plan`, { plan: 'basic' })).status, 200);
+  }
 
   const options = { count: 1, aspectRatio: '1:1', aiProfile: 'local', captions: false };
   async function submit(member, url, mode) {

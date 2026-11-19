@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID, scrypt as derive, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { promisify } from 'node:util';
 import { HttpError } from './validation.mjs';
+import { membership, planId } from './plans.mjs';
 
 const scrypt = promisify(derive);
 const day = 24 * 60 * 60_000;
@@ -13,8 +15,9 @@ let hashing = 0;
 export const emptyWorkspace = () => ({ providers: [], activeProviderId: null, captions: { providerId: null, model: '' }, google: {}, tiktok: {}, mcps: [] });
 export const mustChangePassword = (user) => Number.isFinite(user?.temporaryPasswordExpiresAt);
 const expiredPassword = (user) => mustChangePassword(user) && user.temporaryPasswordExpiresAt <= Date.now();
-export const publicAccount = (user) => user ? { id: user.id, email: user.email, role: user.role, premium: Boolean(user.premium), premiumRequested: Boolean(user.premiumRequested), mustChangePassword: mustChangePassword(user), theme: user.theme || null, createdAt: user.createdAt } : null;
-export const canUsePremium = (user) => Boolean(user?.premium || user?.role === 'admin');
+export const publicAccount = (user) => user ? { id: user.id, email: user.email, role: user.role, premium: canUsePremium(user), premiumRequested: Boolean(user.premiumRequested), mustChangePassword: mustChangePassword(user), plan: membership(user), createdAt: user.createdAt } : null;
+export const canUsePremium = (user) => Boolean(user && planId(user) !== 'free');
+export const adminAccount = (user) => ({ ...publicAccount(user), lastSignIn: user.lastSignIn || null, planOverrides: user.planOverrides || {} });
 
 function emailOf(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -55,7 +58,7 @@ function revokeSessions(store, user) {
 }
 
 async function newAccount(email, password, role) {
-  const account = { id: randomUUID(), email, role, premium: false, premiumRequested: false, theme: null, workspace: emptyWorkspace(), createdAt: new Date().toISOString() };
+  const account = { id: randomUUID(), email, role, plan: 'free', premiumRequested: false, workspace: emptyWorkspace(), createdAt: new Date().toISOString() };
   account.password = await passwordRecord(password);
   return account;
 }
@@ -130,6 +133,8 @@ export function createAuth(store, { secure, embedded = () => false, reserved = p
     let retained = 0;
     store.state.sessions = store.state.sessions.filter((session) => session.expiresAt > now && (session.userId !== user.id || retained++ < 9));
     store.state.sessions.unshift({ token: digest(token), userId: user.id, expiresAt });
+    const address = req.ip?.replace(/^::ffff:(?=\d)/i, '');
+    user.lastSignIn = { at: new Date(now).toISOString(), ip: isIP(address || '') ? address : null };
     store.save();
     res.cookie(cookie, token, { ...options(req), maxAge: Math.max(0, expiresAt - now) });
     return user;
@@ -156,7 +161,7 @@ export function createAuth(store, { secure, embedded = () => false, reserved = p
       throttle(`login-email:${req.ip}:${email}`, 12);
       if (!validPassword(password)) throw new HttpError(401, 'Email or password is incorrect.');
       const user = find(email), record = user?.password;
-      if (!(await matchesPassword(password, record)) || !user || user.password !== record) throw new HttpError(401, 'Email or password is incorrect.');
+      if (!(await matchesPassword(password, record)) || !user || user.password !== record || user.email !== email) throw new HttpError(401, 'Email or password is incorrect.');
       if (expiredPassword(user)) throw new HttpError(401, 'This temporary password expired. Ask the host administrator to replace it.');
       return issue(req, res, user);
     },
@@ -177,6 +182,27 @@ export function createAuth(store, { secure, embedded = () => false, reserved = p
       revokeSessions(store, user);
       store.save();
       res.clearCookie(cookie, options(req));
+    },
+    async changeMember(req, operator, member) {
+      if (operator.role !== 'admin' || member.role !== 'member') throw new HttpError(403, 'Only member credentials can be edited here.');
+      throttle(`member-credentials:${operator.id}`, 8);
+      const { email, adminPassword, temporaryPassword, confirmPassword } = req.body || {};
+      const nextEmail = email === undefined ? member.email : emailOf(email);
+      const resetting = temporaryPassword !== undefined;
+      if (nextEmail === member.email && !resetting) throw new HttpError(400, 'Enter a different email or a temporary password.');
+      if (resetting && (!validPassword(temporaryPassword, 14) || temporaryPassword !== confirmPassword)) throw new HttpError(400, 'Enter and confirm a temporary password of at least 14 characters.');
+      if (resetting && temporaryPassword === adminPassword) throw new HttpError(400, 'Do not reuse your administrator password.');
+      const operatorRecord = operator.password, memberRecord = member.password, originalEmail = member.email;
+      if (!validPassword(adminPassword, 14) || !(await matchesPassword(adminPassword, operatorRecord))) throw new HttpError(403, 'Administrator password is incorrect.');
+      const taken = () => nextEmail !== originalEmail && (nextEmail === reservedEmail || store.state.users.some((row) => row !== member && row.email === nextEmail));
+      if (taken()) throw new HttpError(409, 'That email is already in use.');
+      const replacement = resetting ? await passwordRecord(temporaryPassword) : null;
+      if (operatorRecord !== operator.password || identify(req) !== operator || memberRecord !== member.password || member.email !== originalEmail) throw new HttpError(409, 'Account credentials changed. Refresh and try again.');
+      if (taken()) throw new HttpError(409, 'That email is already in use.');
+      member.email = nextEmail;
+      if (replacement) { member.password = replacement; markPassword(member, true); }
+      revokeSessions(store, member);
+      store.save();
     },
     logout(req, res) {
       const token = tokenOf(req);

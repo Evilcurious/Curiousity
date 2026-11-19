@@ -159,7 +159,7 @@ export function createGoogle(store, { useEnv = true, background = true } = {}) {
       scope: ['openid', 'profile', ...selected.map((target) => googleScopes[target])].join(' '), state: id, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url') }).toString();
     return { url: url.href, state: id, secure: redirect.protocol === 'https:' };
   }
-  async function callback(query) {
+  async function callback(query, authorized = () => true) {
     const id = text(query.state, 100), entry = pending.get(id);
     pending.delete(id);
     if (!entry || entry.expiry < Date.now() || entry.configId !== fingerprint() || entry.revision !== revision) throw new HttpError(400, 'The Google sign-in expired. Connect again from Integrations.');
@@ -173,6 +173,7 @@ export function createGoogle(store, { useEnv = true, background = true } = {}) {
     const profile = await jsonResponse(await request('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } }));
     if (typeof profile.sub !== 'string' || !profile.sub) throw new HttpError(502, 'Google did not identify the connected account.');
     if (entry.configId !== fingerprint() || entry.revision !== revision) throw new HttpError(409, 'Google settings changed. Connect again from Integrations.');
+    if (!authorized()) throw new HttpError(401, 'Your session changed. Sign in and reconnect.');
     state.account = { id: String(profile.sub), name: text(profile.name, 100) || 'Google account', targets, configId: entry.configId,
       access: store.seal(token.access_token), refresh: store.seal(token.refresh_token), expiry: Date.now() + Number(token.expires_in || 0) * 1000 };
     store.save();

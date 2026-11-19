@@ -3,7 +3,7 @@ import { AlertCircle, ArrowRight, Check, LoaderCircle, X } from 'lucide-react';
 import { apiResponseError } from './api-errors.mjs';
 
 export const ACTIVE = new Set(['queued', 'waiting_replay', 'fetching', 'downloading', 'capturing', 'analyzing', 'rendering']);
-export const STATES = { queued: 'In queue', waiting_replay: 'Waiting for replay', fetching: 'Checking source', downloading: 'Downloading', capturing: 'Capturing live', analyzing: 'Analyzing', rendering: 'Rendering', ready: 'Ready', failed: 'Failed', cancelled: 'Stopped' };
+export const STATES = { queued: 'In queue', monitorOpen: 'Monitor open', waiting_replay: 'Waiting for replay', fetching: 'Checking source', downloading: 'Downloading', capturing: 'Capturing live', analyzing: 'Analyzing', rendering: 'Rendering', ready: 'Ready', failed: 'Failed', cancelled: 'Stopped' };
 export const POSTING = { queued: 'Queued for TikTok', uploading: 'Uploading to TikTok', processing: 'TikTok processing', sent: 'Sent to TikTok inbox', failed: 'TikTok upload failed', unconfirmed: 'Delivery not confirmed' };
 export const SHORT_DATE = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 export function timecode(sec) {

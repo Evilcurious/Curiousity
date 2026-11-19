@@ -48,7 +48,7 @@ function ProviderDialog({ existing, onClose, onSaved, allowLocal }) {
 
 export function Providers({ user, workspace, refresh, notify }) {
   const [dialog, setDialog] = useState(null), [confirm, setConfirm] = useState(null), [busy, setBusy] = useState(''), [error, setError] = useState('');
-  const [shareConfirm, setShareConfirm] = useState(null);
+  const [shareConfirm, setShareConfirm] = useState(null), [shareMode, setShareMode] = useState('private');
   const [captionId, setCaptionId] = useState(''), [captionModel, setCaptionModel] = useState('');
   const [search, setSearch] = useState(''), [providerType, setProviderType] = useState(''), [shown, setShown] = useState(12);
   const profiles = workspace?.providers || [];
@@ -69,7 +69,7 @@ export function Providers({ user, workspace, refresh, notify }) {
   }
   const activate = (id) => run(id || 'local', () => api('/settings/ranking', { method: 'PUT', body: { providerId: id } }), id ? 'Highlight model updated.' : 'Switched to local analysis.');
   return <div className="view-enter">
-    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Add your own API keys and models, with or without Premium. Use your saved models in Chat or choose a default for highlight analysis."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
+    <PageHeading label="WORKSPACE / AI" title="AI providers" subtitle="Add your own API keys and models on any plan. Use your saved models in Chat or choose a default for highlight analysis."><Button tone="primary" icon={Plus} onClick={() => setDialog('new')}>Add provider</Button></PageHeading>
     <div className="panel feature-panel ranking-banner"><Glyph icon={Sparkles}/><div><p className="eyebrow">YOUR DEFAULT HIGHLIGHT MODEL</p><h2>{active?.name || 'Local analysis'}</h2><p>{active ? active.model : 'Scores transcript cues, audio activity, and replay data when available. No API key required.'}</p></div>{active ? <Button icon={Cpu} busy={busy === 'local'} onClick={() => activate(null)}>Use local analysis</Button> : <span className="badge badge-green"><i/>Active</span>}</div>
     <div className="section-heading settings-section-title"><h2>Your provider profiles</h2><span className="muted">{profiles.length} saved</span></div>
     {profiles.length > 0 && <div className="profiles-toolbar">
@@ -77,14 +77,14 @@ export function Providers({ user, workspace, refresh, notify }) {
       <Select aria-label="Filter by provider" value={providerType} onChange={(event) => { setProviderType(event.target.value); setShown(12); }}><option value="">All providers</option>{types.map(([key, value]) => <option key={key} value={key}>{value.name}</option>)}</Select>
     </div>}
     <div className="panel profile-panel">
-      {filtered.length ? filtered.slice(0, shown).map((profile) => <div className="profile-row" key={profile.id}><Glyph icon={Cpu} subtle/><div className="profile-info"><h3>{profile.name}</h3><p>{providers[profile.type]?.name} · {profile.model || 'No chat model selected'}</p></div><div className="profile-actions">{active?.id === profile.id ? <span className="badge badge-green"><i/>Default</span> : <Button disabled={!profile.model} busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}{isAdmin && <Button icon={Crown} aria-pressed={profile.premiumShared} disabled={!profile.model} busy={busy === `share-${profile.id}`} onClick={() => { setError(''); setShareConfirm(profile); }}>{profile.premiumShared ? 'Stop sharing' : 'Share to premium'}</Button>}<Button onClick={() => setDialog(profile)}>Edit</Button><button className="icon-button" title="Remove provider" aria-label={`Remove ${profile.name}`} onClick={() => { setError(''); setConfirm(profile); }}><Trash2 size={16}/></button></div></div>)
+      {filtered.length ? filtered.slice(0, shown).map((profile) => <div className="profile-row" key={profile.id}><Glyph icon={Cpu} subtle/><div className="profile-info"><h3>{profile.name}</h3><p>{providers[profile.type]?.name} · {profile.model || 'No chat model selected'}</p></div><div className="profile-actions">{active?.id === profile.id ? <span className="badge badge-green"><i/>Default</span> : <Button disabled={!profile.model} busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}{isAdmin && <Button icon={Crown} aria-pressed={profile.premiumShared} disabled={!profile.model} busy={busy === `share-${profile.id}`} onClick={() => { setError(''); setShareMode(profile.freeShared ? 'all' : profile.premiumShared ? 'paid' : 'private'); setShareConfirm(profile); }}>{profile.freeShared ? 'Shared with all plans' : profile.premiumShared ? 'Shared with paid plans' : 'Share model'}</Button>}<Button onClick={() => setDialog(profile)}>Edit</Button><button className="icon-button" title="Remove provider" aria-label={`Remove ${profile.name}`} onClick={() => { setError(''); setConfirm(profile); }}><Trash2 size={16}/></button></div></div>)
         : profiles.length ? <EmptyState icon={Search} title="No matching profiles" action={<Button onClick={resetFilter}>Clear filters</Button>}>Search by profile name, provider, model, or endpoint.</EmptyState>
         : <EmptyState icon={KeyRound} title="No providers added" action={<Button icon={Plus} onClick={() => setDialog('new')}>Add a provider</Button>}>Choose a preset like OpenAI, Gemini, DeepSeek or LM Studio, or enter a public OpenAI-compatible HTTPS URL.</EmptyState>}
       {filtered.length > 0 && (filtered.length > shown || filtered.length < profiles.length) && <div className="profiles-footer"><span>Showing {Math.min(shown, filtered.length)} of {profiles.length} profiles</span>{filtered.length > shown && <Button onClick={() => setShown((count) => count + 12)}>Show more</Button>}</div>}
     </div>
     {!isAdmin && <section className="panel service-panel premium-panel">
-      <PanelHeading icon={Crown} title="Premium AI" description="Chat models provided by your workspace administrator. API keys are never shown or added to your profiles."/>
-      {shared.length ? shared.map((profile) => <div className="connection-row" key={profile.id}><div><strong>{profile.name}</strong><p>{profile.model} · Shared chat model</p></div>{active?.id === profile.id ? <span className="badge badge-green"><i/>Default</span> : <Button busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}</div>) : <p>{user.premium ? 'No chat models have been shared yet.' : <>Want to use a shared model? <a href="#/settings/account">{user.premiumRequested ? 'View your pending request' : 'Request premium access'}</a>.</>}</p>}
+      <PanelHeading icon={Crown} title="Shared AI models" description="Use these models in Chat and Studio under your plan’s shared AI allowance. The administrator’s keys stay private."/>
+      {shared.length ? shared.map((profile) => <div className="connection-row" key={profile.id}><div><strong>{profile.name}</strong><p>{profile.model} · Shared chat model</p></div>{active?.id === profile.id ? <span className="badge badge-green"><i/>Default</span> : <Button busy={busy === profile.id} onClick={() => activate(profile.id)}>Use model</Button>}</div>) : <p>No shared models are available to your plan. Use your own key or <a href="#/settings/account?plans=1">view plans</a>.</p>}
     </section>}
     <section className="panel service-panel">
       <PanelHeading icon={Captions} title="Caption engine" description="For speech transcription when the source has no usable captions. This is separate from your project’s chat model."/>
@@ -96,7 +96,13 @@ export function Providers({ user, workspace, refresh, notify }) {
       <p className="privacy-note"><ShieldCheck size={16}/> External models may receive transcript excerpts or audio and incur usage costs. Keep Local analysis and Local Whisper selected to avoid sending content to AI providers.</p>
     </section>
     {dialog && <ProviderDialog allowLocal={isAdmin} existing={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSaved={(message) => { if (dialog === 'new') resetFilter(); setDialog(null); refresh(); notify(message); }}/>}
-    {shareConfirm && <Confirm title={shareConfirm.premiumShared ? 'Make this chat model private?' : 'Share this chat model with premium members?'} message={shareConfirm.premiumShared ? 'New projects will not be able to use this model through Premium.' : `Premium members can send transcript excerpts to ${shareConfirm.name} for scoring and translation. They will not see your key, but use may be billed to your provider account.`} label={shareConfirm.premiumShared ? 'Stop sharing' : 'Share model'} danger={shareConfirm.premiumShared} onClose={() => setShareConfirm(null)} busy={busy === `share-${shareConfirm.id}`} error={error} onConfirm={() => run(`share-${shareConfirm.id}`, () => api(`/admin/providers/${shareConfirm.id}/share`, { method: 'PUT', body: { shared: !shareConfirm.premiumShared } }), shareConfirm.premiumShared ? 'Model is now private.' : 'Chat model shared with premium members.')}/>}
+    {shareConfirm && <Modal title="Share this chat model" subtitle={`${shareConfirm.name} · Usage can be billed to your provider account. Members never see your key or endpoint.`} onClose={() => { if (!busy) setShareConfirm(null); }}>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); run(`share-${shareConfirm.id}`, () => api(`/admin/providers/${shareConfirm.id}/share`, { method: 'PUT', body: { shared: shareMode !== 'private', includeFree: shareMode === 'all' } }), 'AI model sharing updated.'); }}>
+        <Field label="Available to"><Select value={shareMode} onChange={(event) => setShareMode(event.target.value)}><option value="private">Only me</option><option value="paid">Basic, Premium and Elite</option><option value="all">All plans, including Free</option></Select></Field>
+        {error && <Banner>{error}</Banner>}
+        <div className="modal-actions"><Button onClick={() => setShareConfirm(null)} disabled={Boolean(busy)}>Cancel</Button><Button type="submit" tone="primary" busy={Boolean(busy)}>Save sharing</Button></div>
+      </form>
+    </Modal>}
     {confirm && <Confirm title={`Remove ${confirm.name}?`} message="This removes the saved key. If this was your workspace default or transcription engine, new projects will use the local engine instead." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
   </div>;
 }
@@ -161,10 +167,13 @@ function GoogleConnection({ google, refresh, notify, embedded }) {
 
 export function Integrations({ workspace, refresh, notify, notice }) {
   const tiktok = workspace?.tiktok;
+  const accounts = tiktok?.accounts || (tiktok?.account ? [tiktok.account] : []);
+  const accountLimit = tiktok?.accountLimit;
+  const full = accountLimit != null && accounts.length >= accountLimit;
   const embedded = window.parent !== window;
   const suggestedCallback = window.location.protocol === 'https:' ? `${window.location.origin}/api/tiktok/callback` : '';
   const [fields, setFields] = useState({ clientKey: '', clientSecret: '', redirectUri: suggestedCallback });
-  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [disconnect, setDisconnect] = useState(false);
+  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [disconnect, setDisconnect] = useState(null);
   useEffect(() => setFields({ clientKey: tiktok?.clientKey || '', clientSecret: '', redirectUri: tiktok?.redirectUri || suggestedCallback }), [tiktok?.clientKey, tiktok?.redirectUri, suggestedCallback]);
   const field = (name, value) => setFields((prev) => ({ ...prev, [name]: value }));
   async function run(action) {
@@ -177,8 +186,8 @@ export function Integrations({ workspace, refresh, notify, notice }) {
         await api('/tiktok/config', { method: 'PUT', body: fields });
         field('clientSecret', ''); await refresh(); notify('TikTok app settings saved.');
       } else {
-        await api('/tiktok/disconnect', { method: 'POST' });
-        setDisconnect(false); await refresh(); notify('TikTok account disconnected.');
+        await api('/tiktok/disconnect', { method: 'POST', body: { accountId: disconnect.id } });
+        setDisconnect(null); await refresh(); notify('TikTok account disconnected.');
       }
     } catch (err) { setError(err.message); }
     finally { setBusy(''); }
@@ -192,17 +201,18 @@ export function Integrations({ workspace, refresh, notify, notice }) {
     <GoogleConnection google={workspace?.google} refresh={refresh} notify={notify} embedded={embedded}/>
     <section className="panel service-panel integration-panel" aria-label="TikTok connection">
       <PanelHeading icon={TikTokIcon} title="TikTok" description="Send approved video drafts to the TikTok inbox."><ConnectionBadge online={tiktok?.connected}/></PanelHeading>
-      {tiktok?.connected ? <div className="connection-row"><div><strong>{tiktok.account.name}</strong><p>To publish a draft, open its notification in TikTok.</p></div><Button icon={Unplug} onClick={() => { setError(''); setDisconnect(true); }}>Disconnect</Button></div> : <div className="connection-row"><div><strong>Creator account</strong><p>{tiktok?.configured ? 'Authorize the account that should receive drafts.' : 'Save your developer app settings to connect an account.'}</p></div><Button icon={Link2} tone="primary" busy={busy === 'connect'} disabled={embedded || !tiktok?.configured} onClick={() => run('connect')}>Connect account</Button></div>}
+      <div className="connection-row"><div><strong>{accounts.length} {accountLimit != null && `of ${accountLimit} `}{accounts.length === 1 && accountLimit == null ? 'account' : 'accounts'} linked</strong><p>{full ? 'Your slots are full. Reconnect the same account, or disconnect one before adding a different creator.' : tiktok?.configured ? 'Authorize each creator account separately. Choose the destination when reviewing drafts.' : 'Save your TikTok developer app settings to connect a creator account.'}</p></div><Button icon={Link2} tone="primary" busy={busy === 'connect'} disabled={embedded || !tiktok?.configured} onClick={() => run('connect')}>{full ? 'Reconnect account' : 'Connect account'}</Button></div>
+      {accounts.map((account) => <div className="connection-row tiktok-account" key={account.id}><div><strong>{account.name}</strong><p>{account.available === false ? 'Paused · above the current plan’s limit' : 'Can receive reviewed inbox drafts'}</p></div><Button icon={Unplug} aria-label={`Disconnect ${account.name}`} onClick={() => { setError(''); setDisconnect(account); }}>Disconnect</Button></div>)}
       {tiktok?.managedByEnv ? <p className="privacy-note"><LockKeyhole size={16}/> This app is configured with server environment variables.</p> : <form className="modal-form integration-form" onSubmit={(event) => { event.preventDefault(); run('save'); }}>
         <h3>Developer app settings</h3>
         <div className="form-pair"><Field label="Client key"><input required value={fields.clientKey} onChange={(event) => field('clientKey', event.target.value)} autoComplete="off" maxLength={180} placeholder="TikTok app client key"/></Field><Field label="Client secret"><input type="password" required={!tiktok?.configured} value={fields.clientSecret} onChange={(event) => field('clientSecret', event.target.value)} autoComplete="new-password" maxLength={500} placeholder={tiktok?.configured ? 'Leave blank to keep saved secret' : 'TikTok app client secret'}/></Field></div>
-        <Field label="OAuth redirect URL" hint="Open Curiousity on this HTTPS domain and register this exact URL in TikTok’s Login Kit."><input type="url" required value={fields.redirectUri} onChange={(event) => field('redirectUri', event.target.value)} placeholder="https://clips.example.com/api/tiktok/callback"/></Field>
+        <Field label="OAuth redirect URL" hint="Register this exact HTTPS URL in TikTok’s Login Kit. Changing app credentials or the callback disconnects linked TikTok accounts."><input type="url" required value={fields.redirectUri} onChange={(event) => field('redirectUri', event.target.value)} placeholder="https://clips.example.com/api/tiktok/callback"/></Field>
         <div className="integration-save"><Button icon={Check} type="submit" busy={busy === 'save'}>Save configuration</Button></div>
       </form>}
       {error && !disconnect && <Banner>{error}</Banner>}
     </section>
     <section className="panel service-panel how-to-panel"><PanelHeading icon={BookOpen} title="Set up TikTok access" description="Use TikTok’s official Login Kit and Content Posting API."/><ol><li>Create an app in <a href="https://developers.tiktok.com/" target="_blank" rel="noreferrer">TikTok for Developers <ArrowUpRight size={13}/></a> and add Login Kit and Content Posting API.</li><li>Register the HTTPS callback and request the <code>user.info.basic</code> and <code>video.upload</code> scopes for the account.</li><li>Connect the account here. In a finished project, select clips and confirm the draft upload after previewing them.</li></ol><p className="privacy-note"><ShieldCheck size={16}/> TikTok approval and upload limits apply. Curiousity does not publish unattended to a public feed.</p></section>
-    {disconnect && <Confirm title="Disconnect TikTok?" message="This removes the saved account tokens from Curiousity. Drafts already sent to TikTok will stay there." label="Disconnect" onClose={() => setDisconnect(false)} onConfirm={() => run('disconnect')} busy={busy === 'disconnect'} error={error}/>}
+    {disconnect && <Confirm title={`Disconnect ${disconnect.name}?`} message="This removes only this account’s saved tokens from Curiousity. Drafts already sent to TikTok will stay there." label="Disconnect" onClose={() => { if (!busy) setDisconnect(null); }} onConfirm={() => run('disconnect')} busy={busy === 'disconnect'} error={error}/>}
   </div>;
 }
 

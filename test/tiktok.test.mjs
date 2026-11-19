@@ -81,3 +81,65 @@ test('OAuth state is single-use; only a consented batch is uploaded and marked s
   assert.equal(calls.length, 5);
   assert.throws(() => tiktok.queue(job, { ...selection, consent: true }), { status: 409 });
 });
+
+test('TikTok keeps the existing creator, enforces plan slots, and sends to the expressly approved account', async (t) => {
+  const store = createStore();
+  const root = store.state.tiktok;
+  root.config = { clientKey: 'fixture-app', clientSecret: store.seal('fixture-secret'), redirectUri: 'https://example.net/api/tiktok/callback' };
+  root.account = { id: 'creator-A', name: 'Existing creator', access: store.seal('token-A'), refresh: store.seal('refresh-A'), expiry: Date.now() + 3_600_000 };
+  store.save();
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  let limit = 2;
+  const tiktok = createTikTok(store, { background: false, accountLimit: () => limit });
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (resource, options) => {
+    const url = String(resource);
+    if (url.endsWith('/oauth/token/')) {
+      const key = options.body.get('code') || options.body.get('refresh_token')?.slice(-1);
+      assert.ok(['A', 'B', 'C'].includes(key));
+      return Response.json({ scope: 'video.upload,user.info.basic', open_id: `creator-${key}`, access_token: `token-${key}`, refresh_token: `refresh-${key}`,
+        expires_in: options.body.get('grant_type') === 'refresh_token' ? 3600 : 0 });
+    }
+    if (url.includes('/user/info/')) {
+      const key = options.headers.Authorization.slice(-1);
+      return Response.json({ data: { user: { open_id: `creator-${key}`, display_name: `TikTok ${key}` } } });
+    }
+    if (url.endsWith('/post/publish/inbox/video/init/')) {
+      sent.push(options.headers.Authorization);
+      return Response.json({ data: { upload_url: 'https://open-upload.tiktokapis.com/video/?upload_id=fixture', publish_id: 'post-for-B' } });
+    }
+    if (url.includes('open-upload.')) return new Response(null, { status: 201 });
+    throw new Error('Unexpected TikTok request');
+  });
+  const add = (code, authorized) => tiktok.callback({ state: new URL(tiktok.connect()).searchParams.get('state'), code }, authorized);
+  assert.equal(root.account, undefined);
+  assert.equal(root.accounts[0].id, 'creator-A');
+  await add('B');
+  await assert.rejects(add('C'), { status: 429 });
+  await assert.rejects(add('A', () => false), { status: 401 });
+  await add('B'); // Reauthorizing the same identity doesn't use a slot.
+  assert.deepEqual(tiktok.describe().accounts.map(({ id, available }) => [id, available]), [['creator-A', true], ['creator-B', true]]);
+  assert.doesNotMatch(JSON.stringify(tiktok.describe()), /token-[AB]|refresh-[AB]|fixture-secret/);
+  assert.throws(() => tiktok.disconnect(), { status: 400 });
+
+  const clip = { id: 'clip-1' }, job = { id: 'project-2', status: 'ready', options: { demo: false }, clips: [clip] };
+  const path = join(jobDir(job.id), clip.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'video.mp4'), Buffer.alloc(128));
+  store.state.jobs.push(job);
+  const selection = { clipIds: [clip.id], accountId: 'creator-B', consent: true };
+  limit = 1;
+  assert.equal(tiktok.describe().accounts[1].available, false);
+  assert.throws(() => tiktok.queue(job, selection), { status: 409 });
+  assert.deepEqual(sent, []);
+  limit = 2;
+  tiktok.queue(job, selection);
+  await waitFor(() => clip.tiktok.state === 'processing');
+  assert.deepEqual(sent, ['Bearer token-B']);
+  assert.equal(clip.tiktok.accountId, 'creator-B');
+  tiktok.disconnect('creator-A');
+  limit = 1;
+  assert.equal(tiktok.describe().account.id, 'creator-B');
+  assert.equal(tiktok.describe().accounts.length, 1);
+  assert.equal(store.unseal(root.accounts[0].refresh), 'refresh-B');
+});

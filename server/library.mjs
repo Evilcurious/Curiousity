@@ -27,11 +27,12 @@ export function browseShared(store, user, unavailable, query) {
   return { clips: clips.slice(offset, offset + 24), next: clips.length > offset + 24 ? offset + 24 : null };
 }
 
-export async function saveSharedClip(store, user, job, clip, stillShared) {
+export async function saveSharedClip(store, user, job, clip, stillShared, reserveProject) {
   const origin = `${job.id}/${clip.id}`;
   const existing = store.state.jobs.find((item) => item.ownerId === user.id && item.libraryOrigin === origin);
   if (existing) return existing;
   if (job.ownerId === user.id) return job;
+  reserveProject(true);
   const id = randomUUID(), clipId = 'clip-1', base = jobDir(id), target = join(base, clipId), source = join(jobDir(job.id), clip.id);
   const frame = job.frame || exportFrame(job.options);
   const copy = { id: clipId, title: clip.title, reason: 'Saved from the shared clip library.', start: 0, end: clip.duration, duration: clip.duration, score: clip.score,
@@ -44,6 +45,7 @@ export async function saveSharedClip(store, user, job, clip, stillShared) {
       catch (error) { if (!['EXDEV', 'ENOTSUP', 'EPERM'].includes(error.code)) throw error; await copyFile(from, to); }
     }
     if (!stillShared()) throw new HttpError(404, 'This clip is no longer shared.');
+    reserveProject(false);
     const now = new Date().toISOString();
     const saved = { id, ownerId: user.id, libraryOrigin: origin, title: clip.title, duration: clip.duration, sourceKind: 'shared', frame,
       options: { demo: Boolean(job.options?.demo), count: 1, tiktok: false, captions: Boolean(clip.withCaptions), aspectRatio: frame.ratio, platform: 'universal' },

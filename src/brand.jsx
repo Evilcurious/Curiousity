@@ -8,8 +8,8 @@ export function Wordmark({ branding }) {
   return <><Logo branding={branding}/><span>Curiousity<span className="brand-dot">.</span></span></>;
 }
 
-export function applyBrand(branding, personal) {
-  const id = hasTheme(personal) ? personal : branding?.theme || defaultTheme;
+export function applyBrand(branding) {
+  const id = hasTheme(branding?.theme) ? branding.theme : defaultTheme;
   const root = document.documentElement;
   root.dataset.theme = id;
   root.dataset.mode = themes[id]?.mode || 'dark';

@@ -25,6 +25,10 @@ if (trace) globalThis.fetch = async (input, options) => {
       }));
       return Response.json({ choices: [{ message: { content: JSON.stringify(decisions) } }] });
     }
+    if (body.messages[0].content.startsWith('A public livestream chat spike was observed.')) {
+      const { windows } = JSON.parse(latest);
+      return Response.json({ choices: [{ message: { content: JSON.stringify(windows.map(({ id }) => ({ id, score: 91 }))) } }] });
+    }
     if (latest === 'Wait for disconnect') {
       try { await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })); }
       finally { await appendFile(trace, `${JSON.stringify({ aborted: true })}\n`); }
