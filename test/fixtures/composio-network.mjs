@@ -7,12 +7,18 @@ export const publicSite = 'https://workspace.example.test';
 export const emailTool = 'GMAIL_SEND_EMAIL';
 export const toolkitFixture = (slug, name, extras = {}) => ({ slug, name, type: 'native', toolkit_type: 'api', composio_managed_auth_schemes: ['OAUTH2'], meta: { description: `Connect to ${name}.` }, ...extras });
 const traces = process.env.FIXTURE_COMPOSIO_TRACE;
+const discovery = process.env.FIXTURE_COMPOSIO_DISCOVERY;
 const upstream = globalThis.fetch;
 const reply = (content) => Response.json({ choices: [{ message: { content } }] });
 const apps = [toolkitFixture('gmail', 'Gmail'), toolkitFixture('slack', 'Slack'), toolkitFixture('provider_mcp', 'External MCP', { toolkit_type: 'mcp' }), toolkitFixture('no_auth', 'Unlinked workspace', { no_auth: true }), toolkitFixture('api_key', 'API key only', { composio_managed_auth_schemes: ['API_KEY'] })];
 const inputSchema = { type: 'object', properties: {
   recipient_email: { type: 'string', minLength: 3 }, subject: { type: 'string' }, body: { type: 'string' },
 }, required: ['recipient_email', 'subject', 'body'], additionalProperties: false };
+const emailMetadata = (extras = {}) => ({ slug: emailTool, name: 'Send an email', description: 'Send an email with a subject and body.', toolkit: { slug: 'gmail' }, input_parameters: inputSchema, no_auth: false, is_deprecated: false, ...extras });
+const fieldMap = Object.fromEntries(Object.entries(inputSchema.properties).map(([name, schema]) => [name, { ...schema, required: true, description: `Test input; do not reveal ${modelKey}.` }]));
+const localRefSchema = { ...inputSchema, properties: { ...inputSchema.properties, recipient_email: { $ref: '#/$defs/Recipient' } }, $defs: { Recipient: inputSchema.properties.recipient_email } };
+const remoteRefSchema = { ...inputSchema, properties: { ...inputSchema.properties, recipient_email: { $ref: 'https://schemas.example.test/recipient.json' } } };
+const invalidDetails = new Set(['invalid', 'recover']);
 let seq = 0;
 const sessions = new Map(), accounts = new Map();
 const item = (account) => ({ id: account.id, toolkit: { slug: account.slug }, alias: account.alias, status: account.status, is_disabled: false,
@@ -34,6 +40,8 @@ if (traces) globalThis.fetch = async (input, options) => {
     const tool = prompt.includes('invalid tool') ? 'COMPOSIO_PROXY_EXECUTE' : emailTool;
     const args = { recipient_email: 'recipient@example.test', subject: 'Reviewed draft', body: 'This is the exact approved text.' };
     if (prompt.includes('invalid arguments')) args.unknown_input = 'not allowed';
+    if (prompt.includes('missing subject')) delete args.subject;
+    if (prompt.includes('invalid recipient')) args.recipient_email = 'x';
     return reply(JSON.stringify({ tool, arguments: args }));
   }
   if (!keyOk || !pathname.startsWith('/api/v3.1/')) return err(401);
@@ -64,7 +72,27 @@ if (traces) globalThis.fetch = async (input, options) => {
     sessions.set(id, body);
     return Response.json({ session_id: id, mcp: { url: 'https://never-exposed.example.test/mcp', headers: { Authorization: projectKey } } }, { status: 201 });
   }
-  if (path === `/tools/${emailTool}`) return Response.json({ slug: emailTool, name: 'Send an email', toolkit: { slug: 'gmail' }, input_parameters: inputSchema, no_auth: false, is_deprecated: false });
+  if (path === '/tools' && method === 'GET') {
+    const toolkit = url.searchParams.get('toolkit_slug'), query = url.searchParams.get('query');
+    if (!toolkit || url.searchParams.get('include_deprecated') !== 'false') return err(400);
+    const irrelevant = [
+      emailMetadata({ slug: 'SLACK_SEND_MESSAGE', toolkit: { slug: 'slack' } }),
+      emailMetadata({ slug: 'COMPOSIO_PROXY_EXECUTE' }),
+      emailMetadata({ slug: 'GMAIL_LEGACY_SEND', is_deprecated: true }),
+      emailMetadata({ slug: 'GMAIL_SEND_WITHOUT_AUTH', no_auth: true }),
+    ];
+    let items = [];
+    if (toolkit === 'gmail' && (discovery === 'empty' || (discovery === 'recover' && !query))) items = [...irrelevant, emailMetadata({ input_parameters: fieldMap })];
+    if (discovery === 'invalid' && toolkit === 'gmail' && !query) items = [
+      emailMetadata({ input_parameters: remoteRefSchema }),
+      emailMetadata({ slug: 'GMAIL_RECURSIVE', input_parameters: { ...localRefSchema, $defs: { Recipient: { $ref: '#/$defs/Recipient' } } } }),
+      emailMetadata({ slug: 'GMAIL_ASYNC', input_parameters: { ...inputSchema, $async: true } }),
+      emailMetadata({ slug: 'GMAIL_PATTERN', input_parameters: { ...inputSchema, properties: { subject: { type: 'string', pattern: '^[a-z]+$' } } } }),
+    ];
+    if (discovery === 'invalid' && toolkit === 'slack') items = [emailMetadata()];
+    return Response.json({ items, next_cursor: null });
+  }
+  if (path === `/tools/${emailTool}`) return Response.json(emailMetadata({ input_parameters: discovery === 'ranked' ? localRefSchema : invalidDetails.has(discovery) ? remoteRefSchema : inputSchema }));
   const match = /^\/tool_router\/session\/([^/]+)(?:\/([^/]+))?$/.exec(path);
   if (!match) return err(404);
   const [, id, action] = match;
@@ -79,6 +107,8 @@ if (traces) globalThis.fetch = async (input, options) => {
   const account = accounts.get(session.connected_accounts?.[slug]?.[0]);
   if (!account || account.userId !== session.user_id || account.slug !== slug || account.status !== 'ACTIVE') return err(403);
   if (action === 'search') {
+    if (discovery === 'empty') return Response.json({ success: true, results: [], tool_schemas: {} });
+    if (discovery === 'ranked') return Response.json({ success: true, results: [{ primary_tool_slugs: ['COMPOSIO_PROXY_EXECUTE', 'GMAIL_MISSING', emailTool] }] });
     const primary = slug === 'gmail' ? [emailTool] : [];
     return Response.json({ success: true, results: [{ primary_tool_slugs: primary }], tool_schemas: {
       ...(primary.length && { [emailTool]: { toolkit: 'gmail', tool_slug: emailTool, hasFullSchema: false } }),

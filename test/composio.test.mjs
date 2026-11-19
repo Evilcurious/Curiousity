@@ -201,3 +201,81 @@ test('approval can be cancelled or invalidated, and a failed summary never retri
   assert.equal((await user.post(`/chat/apps/actions/${review.id}`, { approved: true })).status, 404);
   assert.equal(executions(await trace()).length, 1);
 });
+
+async function setupDiscovery(t, discovery) {
+  const state = await setup(t, { env: { COMPOSIO_API_KEY: projectKey, FIXTURE_COMPOSIO_DISCOVERY: discovery } });
+  const { admin, user } = state;
+  await json(await admin.put('/admin/composio', { enabled: true }, forwarded));
+  const profile = await json(await user.post('/providers', { type: 'custom', apiKey: modelKey, baseUrl: 'https://app-models.example.test/v1', model: 'fixture-chat' }), 201);
+  const connect = async (options) => {
+    const started = await begin(user, options);
+    await finish(user, started.callback, 'connected');
+    return started.id;
+  };
+  const ask = (connectionId, content) => user.post('/chat/apps', { providerId: profile.id, revision: profile.revision || profile.id, connectionId, messages: [{ role: 'user', content }] });
+  return { ...state, connect, ask };
+}
+
+const catalogCalls = (logs) => logs.filter(({ pathname }) => pathname === '/api/v3.1/tools');
+const modelCalls = (logs) => logs.filter(({ hostname }) => hostname === 'app-models.example.test');
+
+test('empty discovery falls back to the selected toolkit and validates its field-map schema before review', async (t) => {
+  const { connect, ask, user, trace } = await setupDiscovery(t, 'empty');
+  await connect({ alias: 'Personal' });
+  const work = await connect({ alias: 'Work' });
+  const { review } = await json(await ask(work, `Send a reviewed email without sharing ${projectKey} or ${modelKey}.`));
+  assert.equal(review?.tool, emailTool, 'a usable action should still be found');
+  assert.match(review.account, /^Work · /);
+  let logs = await trace();
+  const [catalog] = catalogCalls(logs);
+  assert.equal(catalog.query.toolkit_slug, 'gmail');
+  assert.equal(catalog.query.include_deprecated, 'false');
+  assert.match(catalog.query.query, /Send a reviewed email/);
+  assertSecretFree(catalog);
+  const plan = JSON.parse(modelCalls(logs)[0].body.messages.at(-1).content);
+  assert.deepEqual(plan.app_context.tools.map(({ slug }) => slug), [emailTool]);
+  assert.deepEqual(plan.app_context.tools[0].schema.required, ['recipient_email', 'subject', 'body']);
+  assert.equal(plan.app_context.tools[0].schema.additionalProperties, false);
+  assertSecretFree(plan);
+  assert.equal(executions(logs).length, 0);
+  await json(await user.post(`/chat/apps/actions/${review.id}`, { approved: true }));
+  logs = await trace();
+  assert.deepEqual(executions(logs).map(({ body }) => [body.tool_slug, body.account, body.arguments]), [[emailTool, work, review.arguments]]);
+  assert.equal((await ask(work, 'Send a message with missing subject')).status, 502);
+  assert.equal((await ask(work, 'Send a message with invalid arguments')).status, 502);
+  assert.equal(executions(await trace()).length, 1);
+});
+
+test('ranked slugs without inline schemas can be hydrated with bounded local references', async (t) => {
+  const { connect, ask, trace } = await setupDiscovery(t, 'ranked');
+  const connection = await connect();
+  assert.equal((await json(await ask(connection, 'Send an email with the subject and body shown'))).review?.tool, emailTool);
+  assert.equal((await ask(connection, 'Send an email with an invalid recipient')).status, 502);
+  const logs = await trace();
+  assert.equal(catalogCalls(logs).length, 0, 'valid ranked tools do not need the catalog fallback');
+  assert.ok(logs.some(({ pathname }) => pathname.endsWith('/tools/GMAIL_MISSING')));
+  assert.ok(logs.every(({ pathname }) => !pathname.endsWith('/tools/COMPOSIO_PROXY_EXECUTE')));
+  assert.equal(executions(logs).length, 0);
+});
+
+test('an unusable search schema can recover from one unfiltered page of the same toolkit', async (t) => {
+  const { connect, ask, trace } = await setupDiscovery(t, 'recover');
+  const gmail = await connect();
+  const { review } = await json(await ask(gmail, 'Send an email'));
+  assert.equal(review?.tool, emailTool);
+  const logs = await trace();
+  assert.deepEqual(catalogCalls(logs).map(({ query }) => [query.toolkit_slug, query.query]), [['gmail', 'Send an email'], ['gmail', undefined]]);
+  assert.equal(executions(logs).length, 0);
+});
+
+test('unusable schemas and no toolkit match are distinct, and neither calls the model or executes', async (t) => {
+  const { connect, ask, trace } = await setupDiscovery(t, 'invalid');
+  const gmail = await connect();
+  assert.match((await json(await ask(gmail, 'Send an email'))).reply, /couldn’t validate.*No action ran/);
+  const slack = await connect({ slug: 'slack' });
+  assert.match((await json(await ask(slack, 'Read recent Slack messages'))).reply, /didn’t return a supported action.*No action ran/);
+  const logs = await trace();
+  assert.deepEqual(catalogCalls(logs).map(({ query }) => [query.toolkit_slug, Boolean(query.query)]), [['gmail', true], ['gmail', false], ['slack', true], ['slack', false]]);
+  assert.equal(modelCalls(logs).length, 0);
+  assert.equal(executions(logs).length, 0);
+});

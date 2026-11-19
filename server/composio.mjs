@@ -266,9 +266,17 @@ export function createComposio(store, { publicOrigin = '', envKey = process.env.
     return record;
   }
   async function search(ctx, connection, useCase, signal) {
-    return withSession(ctx, connection, { signal }, (path) => request(ctx.key, `${path}/search`, { signal, body: { queries: [{ use_case: useCase }], search_strategy: 'tool_search' } }));
+    return withSession(ctx, connection, { signal }, (path) => request(ctx.key, `${path}/search`, { signal, body: { queries: [{ use_case: useCase }] } }));
   }
-  const toolDetails = (ctx, slug, signal) => request(ctx.key, `/tools/${slug}`, { signal, missing: true });
+  const toolDetails = (ctx, slug, signal) => request(ctx.key, `/tools/${slug}`, { signal, timeout: 7500, missing: true });
+  async function listTools(ctx, connection, query, signal) {
+    const limit = 16;
+    const { items } = await request(ctx.key, '/tools', { signal, timeout: 6500, query: {
+      toolkit_slug: connection.slug, include_deprecated: false, limit, ...(query && { query }),
+    } });
+    if (!Array.isArray(items)) throw invalidResponse();
+    return items.slice(0, limit);
+  }
   async function execute(account, ctx, connection, tool, args, ensure, signal) {
     return withSession(ctx, connection, { tool, signal }, (path) => {
       signal.throwIfAborted();
@@ -283,5 +291,5 @@ export function createComposio(store, { publicOrigin = '', envKey = process.env.
     for (const link of links.values()) if (link.id) void closeSession(link.ctx, link.id);
     links.clear();
   }
-  return { status, adminStatus, configure, context, checkConnection, connections, apps, begin, complete, disconnect, active, search, toolDetails, execute, stop };
+  return { status, adminStatus, configure, context, checkConnection, connections, apps, begin, complete, disconnect, active, search, toolDetails, listTools, execute, stop };
 }
