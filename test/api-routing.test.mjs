@@ -16,7 +16,7 @@ test('the public session check shows the running API features without opening pr
   const body = await session.json();
   assert.equal(body.user, null);
   assert.equal(body.passwordTransport, 'local');
-  assert.deepEqual(body.apiFeatures, { deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true, composioApps: true });
+  assert.deepEqual(body.apiFeatures, { deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true, mediaModes: true, stillCaptions: true, socialOAuth: true, n8nWorkflows: true });
   assert.equal((await member.request('/captions')).status, 401);
   assert.equal((await member.post('/chat', {})).status, 401);
   assert.equal((await member.signup('api-probe@example.test')).status, 201);

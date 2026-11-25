@@ -1,0 +1,24 @@
+.integration-panel { margin-bottom: 16px; }
+.integration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; align-items: start; }
+.integration-form { min-width: 0; }
+.integration-grid .integration-form, .integration-grid .integration-panel { margin: 0; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.integration-guide { padding: 13px; color: var(--muted); background: var(--field); border: 1px solid var(--line); border-radius: 9px; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.integration-guide strong { color: var(--ink); }
+.integration-guide ol { padding-left: 20px; margin: 8px 0; }
+.integration-guide code { color: var(--accent-text); }
+.oauth-card { padding: 14px; border: 1px solid var(--line); background: var(--field); border-radius: 9px; min-width: 0; }
+.oauth-card h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.oauth-card p { margin-block: 7px; font-size: 12px; line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.oauth-card .connection-row { min-width: 0; flex-wrap: wrap; }
+.oauth-card .connection-row strong { overflow-wrap: anywhere; }
+.oauth-card .consent { margin-block: 8px; }
+.oauth-callback { display: block; margin: 8px 0; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; color: var(--accent-text); font-size: 11px; overflow-wrap: anywhere; user-select: all; }
+.workflow-result { display: grid; gap: 9px; min-width: 0; margin-block: 11px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.workflow-result pre { margin: 0; padding: 12px; max-height: min(42dvh, 310px); overflow: auto; background: var(--field); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 500 12px/1.6 var(--mono); }
+.workflow-panel { max-width: 850px; }
+.workflow-panel textarea { width: 100%; }
+.saved-integrations { margin-top: 14px; }
+.saved-integrations > summary { cursor: pointer; font: 700 16px var(--display); }
+.saved-integrations > p { margin: 10px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+@media (max-width: 750px) { .integration-grid { grid-template-columns: 1fr; } }

@@ -5,15 +5,14 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createStore, activeStatuses, jobDir, maxSourceSeconds } from './store.mjs';
+import { createStore, activeStatuses, jobDir, maxSourceBytes, maxSourceSeconds } from './store.mjs';
 import { processProject } from './media.mjs';
-import { captionFiles, captionInputPath, captionJobPublic, isCaptionJob, processCaptionJob } from './device-captions.mjs';
-import { receiveVideo, responseSignal } from './caption-upload.mjs';
+import { captionFiles, captionImagePath, captionInputPath, captionJobPublic, isCaptionJob, processCaptionJob } from './device-captions.mjs';
+import { maxStillImageBytes, receiveStill, receiveVideo, responseSignal } from './caption-upload.mjs';
+import { languages, romanUrdu } from '../shared/exports.mjs';
 import { chatInput } from './chat.mjs';
-import { createComposio } from './composio.mjs';
-import { createAppChat } from './app-chat.mjs';
+import { createN8n } from './n8n.mjs';
 import { discover, discoveryEnabled, discoveryInput } from './discovery.mjs';
-import { finderWorkbook } from './finder-xlsx.mjs';
 import { HttpError, captionStyleInput, jobOptions, maxClips, liveLimits, maxLiveMinutes, text } from './validation.mjs';
 import { chatWithProvider, compatibleProvider, listModels, providerInput, publicProvider, reviewDiscoveryWithProvider } from './providers.mjs';
 import { createTikTok } from './tiktok.mjs';
@@ -32,7 +31,7 @@ import { liveModes } from './live-monitor.mjs';
 const dev = process.argv.includes('--dev');
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 5173);
-// Transitional API only. The web UI offers no new legacy connection setup.
+// Transitional MCP and Buffer setup API only. OAuth setup is administrator-only.
 const legacySetup = process.env.ENABLE_LEGACY_INTEGRATION_API === 'true';
 const loopbackHost = /^(?:127\.0\.0\.1|\[::1\]|localhost)(?::\d{1,5})?$/i;
 const isLoopback = (address) => ipaddr.isValid(address || '') && ipaddr.process(address).range() === 'loopback';
@@ -71,13 +70,12 @@ function passwordTransport(req) {
   return local ? 'local' : 'blocked';
 }
 const auth = createAuth(store, { secure, embedded: preview });
-const composio = createComposio(store, { publicOrigin });
-const appChat = createAppChat(store, composio);
+const n8n = createN8n(store);
 const networkLimit = limiter(60_000);
 const services = new Map();
 const deleting = new Set(), copying = new Set(), chatting = new Set();
 const searching = new Map();
-let current, replayTimer, closing = false, recovering = false;
+let current, captionWorker, replayTimer, closing = false, recovering = false;
 
 for (const account of store.state.users) {
   if (repairWorkspace(account)) recovering = true;
@@ -119,8 +117,9 @@ function connections(account) {
   let value = services.get(account.id);
   if (!value) {
     const scoped = scopedStore(store, account);
-    const options = { useEnv: account.role === 'admin', background: false };
-    value = { google: createGoogle(scoped, options), tiktok: createTikTok(scoped, { ...options, accountLimit: () => planLimits(account).tiktokAccounts }) };
+    const hostConfig = (site) => store.state.users.find((user) => user.role === 'admin')?.workspace?.[site]?.config;
+    const siteOptions = (site) => ({ background: false, ...(account.role !== 'admin' && { sharedConfig: () => hostConfig(site) }) });
+    value = { google: createGoogle(scoped, siteOptions('google')), tiktok: createTikTok(scoped, { ...siteOptions('tiktok'), accountLimit: () => planLimits(account).tiktokAccounts }) };
     services.set(account.id, value);
   }
   return value;
@@ -190,20 +189,34 @@ async function work() {
   clearTimeout(replayTimer);
   const now = Date.now();
   const checkAt = (item) => Number(item.replayWait?.nextCheckAt) || 0;
-  const queue = [...store.state.jobs].reverse().filter((item) => item.ownerId && ['queued', replayWaiting].includes(item.status));
+  const queue = [...store.state.jobs].reverse().filter((item) => item.ownerId && !isCaptionJob(item) && ['queued', replayWaiting].includes(item.status));
   const job = queue.find((item) => item.status === 'queued' || checkAt(item) <= now);
   if (!job) {
     // Waiting replays survive a restart and do not hold the media worker.
     if (queue.length) replayTimer = setTimeout(work, Math.max(1, Math.min(...queue.map(checkAt)) - now)).unref();
     return;
   }
+  await runQueued(job, false);
+}
+
+async function workCaptions() {
+  if (captionWorker || closing) return;
+  // Caption jobs have their own single worker so uploads never wait for an
+  // open live monitor or a long YouTube download. Both queues remain bounded.
+  const job = store.state.jobs.findLast((item) => item.ownerId && isCaptionJob(item) && item.status === 'queued');
+  if (job) await runQueued(job, true);
+}
+
+async function runQueued(job, captions) {
+  const next = captions ? workCaptions : work;
   const account = store.state.users.find((user) => user.id === job.ownerId);
-  if (!account) { touch(job, { status: 'failed', detail: 'The project owner no longer exists.' }); queueMicrotask(work); return; }
+  if (!account) { touch(job, { status: 'failed', detail: 'The project owner no longer exists.' }); queueMicrotask(next); return; }
   const ctrl = new AbortController();
   const session = { signal: ctrl.signal, requestAnalysis: null, switchToFull: null };
-  current = { ctrl, job, session };
+  const worker = { ctrl, job, session };
+  if (captions) captionWorker = worker; else current = worker;
   try {
-    const process = isCaptionJob(job) ? processCaptionJob : processProject;
+    const process = captions ? processCaptionJob : processProject;
     await process(job, scopedStore(store, account), session, (changes) => touch(job, changes));
     if (job.monitor?.phase === 'ending') touch(job, endedMonitor(job));
   }
@@ -216,7 +229,10 @@ async function work() {
       const detail = (isCaptionJob(job) && (error.code || error instanceof SyntaxError)) ? 'Video processing failed. Check the source and available disk space.' : error.message || 'Project processing failed.';
       touch(job, { status: 'failed', error: detail, detail, ...(job.monitor?.open && { monitor: { ...job.monitor, phase: 'idle', busy: false, canAnalyze: false, analysis: detail, chat: null } }) });
     }
-  } finally { current = null; queueMicrotask(work); }
+  } finally {
+    if (captions) captionWorker = null; else current = null;
+    queueMicrotask(next);
+  }
 }
 
 app.use((req, res, next) => {
@@ -262,7 +278,7 @@ function allowPassword(req) {
   throw new HttpError(403, `Password requests require HTTPS. ${hint}`);
 }
 // Route support only; media tools and a configured chat model are checked separately.
-const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true, composioApps: true });
+const apiFeatures = Object.freeze({ deviceCaptions: true, personalChat: true, chatDiscovery: true, discoveryVerification: true, liveReplay: true, liveMonitorModes: true, membershipPlans: true, mediaModes: true, stillCaptions: true, socialOAuth: true, n8nWorkflows: true });
 app.get('/api/auth/session', (req, res) => res.json({ ...authResponse(auth.identify(req)), httpsOrigin: publicOrigin || null, passwordTransport: passwordTransport(req), apiFeatures }));
 app.post('/api/auth/signup', async (req, res) => { allowPassword(req); const account = await auth.signup(req, res); res.status(201).json(authResponse(account)); });
 app.post('/api/auth/signin', async (req, res) => { allowPassword(req); res.json(authResponse(await auth.login(req, res))); });
@@ -273,6 +289,7 @@ app.get('/api/brand/logo', (_req, res) => {
 });
 
 async function oauthCallback(service, req, res) {
+  if (req.method !== 'GET') return res.status(405).set('Allow', 'GET').end();
   const account = auth.identify(req);
   let result = `${service === 'google' ? 'Google' : 'TikTok'} connected.`;
   try {
@@ -281,30 +298,14 @@ async function oauthCallback(service, req, res) {
     const prefix = `cf_${service}_state=`;
     const state = (req.get('cookie') || '').split(/;\s*/).find((item) => item.startsWith(prefix))?.slice(prefix.length);
     if (!state || state !== req.query.state) throw new HttpError(400, 'This connection was not started in this browser. Try again from Settings → Integrations.');
-    await connections(account)[service].callback(req.query, () => auth.identify(req) === account && !mustChangePassword(account));
+    const session = auth.sessionKey(req);
+    await connections(account)[service].callback(req.query, () => auth.identify(req) === account && !mustChangePassword(account) && auth.sessionKey(req) === session, session);
   } catch (error) { result = error instanceof HttpError ? error.message : 'The connection could not be completed.'; }
   res.clearCookie(`cf_${service}_state`, { httpOnly: true, sameSite: 'lax', secure: service === 'tiktok' || secure(req), path: `/api/${service}/callback` });
   res.redirect(303, `/#/settings/integrations?notice=${encodeURIComponent(result)}`);
 }
 app.get('/api/google/callback', (req, res) => oauthCallback('google', req, res));
 app.get('/api/tiktok/callback', (req, res) => oauthCallback('tiktok', req, res));
-function onPublicOrigin(req) {
-  if (!publicOrigin || !secure(req)) return false;
-  const host = new URL(publicOrigin).host;
-  return req.get('host')?.toLowerCase() === host || ((proxyTrusted(req) || preview(req)) && req.get('x-forwarded-host')?.trim().toLowerCase() === host);
-}
-app.get('/api/composio/callback', async (req, res) => {
-  if (req.method !== 'GET') return res.status(405).set('Allow', 'GET').end();
-  const account = auth.identify(req);
-  let returned = { from: 'integrations', result: 'signin' };
-  if (account && !mustChangePassword(account) && onPublicOrigin(req)) {
-    returned = await composio.complete(account, auth.sessionKey(req), req.query, () => {
-      if (auth.identify(req) !== account || mustChangePassword(account)) throw new HttpError(401, 'Sign in again to finish connecting.');
-    });
-  }
-  const target = returned.from === 'chat' ? '/#/chat?apps=1&' : '/#/settings/integrations?';
-  res.redirect(303, `${target}composio=${returned.result}`);
-});
 app.use('/api', (req, _res, next) => {
   const account = auth.identify(req);
   if (!account) return next(new HttpError(401, 'Sign in to your Curiousity account.'));
@@ -322,13 +323,20 @@ app.put('/api/account/password', async (req, res) => {
 app.use('/api', (req, _res, next) => mustChangePassword(req.account) ? next(new HttpError(403, 'Replace your temporary password in Account settings first.')) : next());
 app.use('/api/admin', (req, _res, next) => req.account.role === 'admin' ? next() : next(new HttpError(403, 'Administrator access is required.')));
 
+const socialView = (service, account) => {
+  const status = service.describe();
+  if (account.role === 'admin') return status;
+  const { clientId, clientKey, redirectUri, ...safe } = status;
+  return safe;
+};
 app.get('/api/workspace', async (req, res) => {
   const { providers, activeProviderId, captions, mcps } = req.scoped.state;
   const { google, tiktok } = connections(req.account);
   res.json({ online: true, tools: await toolsStatus(), user: publicAccount(req.account), branding: publicBrand(store),
     providers: providers.map(publicProviderFor), sharedProviders: sharedProviders(store, req.account).map(sharedProviderCard),
-    activeProviderId: req.scoped.chatProfile(activeProviderId) ? activeProviderId : null, captions, mcps: mcps.map(publicMcp), composio: composio.status(),
-    tiktok: tiktok.describe(), google: google.describe(), discoveryEnabled, bufferCanHost: Boolean(publicOrigin), maxClips, liveLimits, maxLiveMinutes, replayWaitMinutes, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
+    activeProviderId: req.scoped.chatProfile(activeProviderId) ? activeProviderId : null, captions, mcps: mcps.map(publicMcp), mediaModes: true, n8n: n8n.status(), oauthOrigin: publicOrigin || null,
+    tiktok: socialView(tiktok, req.account), google: socialView(google, req.account), discoveryEnabled,
+    stillLimits: { imageMb: Math.floor(maxStillImageBytes / 1024 ** 2), audioMb: Math.floor(maxSourceBytes / 1024 ** 2), minutes: Math.floor(maxSourceSeconds / 60) }, bufferCanHost: Boolean(publicOrigin), maxClips, liveLimits, maxLiveMinutes, replayWaitMinutes, maxSourceMinutes: Math.round(maxSourceSeconds / 60) });
 });
 app.put('/api/account/theme', () => { throw new HttpError(403, 'The workspace theme is set by your administrator.'); });
 app.post('/api/account/premium', (req, res) => {
@@ -377,30 +385,8 @@ app.put('/api/admin/providers/:id/share', (req, res) => {
 function ensureSession(req) {
   if (auth.identify(req) !== req.account || mustChangePassword(req.account)) throw new HttpError(401, 'Your session changed. Sign in again to continue.');
 }
-app.get('/api/admin/composio', (_req, res) => res.json(composio.adminStatus()));
-app.put('/api/admin/composio', async (req, res) => {
-  allowPassword(req);
-  networkLimit(`composio-config:${req.account.id}`, 8);
-  res.json(await composio.configure(req.body, () => ensureSession(req)));
-});
-app.get('/api/composio/connections', async (req, res) => {
-  networkLimit(`composio-read:${req.account.id}`, 40);
-  res.json(await composio.connections(req.account, () => ensureSession(req)));
-});
-app.get('/api/composio/apps', async (req, res) => {
-  networkLimit(`composio-read:${req.account.id}`, 40);
-  res.json(await composio.apps(req.account, req.query, () => ensureSession(req)));
-});
-app.post('/api/composio/connect', async (req, res) => {
-  if (!onPublicOrigin(req)) throw new HttpError(409, 'Open Curiousity at its configured public HTTPS address to connect an app.');
-  networkLimit(`composio-connect:${req.account.id}`, 6);
-  res.json(await composio.begin(req.account, auth.sessionKey(req), req.body, () => ensureSession(req)));
-});
-app.delete('/api/composio/connections/:id', async (req, res) => {
-  networkLimit(`composio-connect:${req.account.id}`, 6);
-  await composio.disconnect(req.account, req.params.id, () => ensureSession(req));
-  res.status(204).end();
-});
+app.get('/api/admin/n8n', (_req, res) => res.json(n8n.adminStatus()));
+app.put('/api/admin/n8n', (req, res) => { ensureSession(req); res.json(n8n.configure(req.body)); });
 
 function checkQueue(account) {
   const active = store.state.jobs.filter((item) => item.ownerId && activeStatuses.has(item.status));
@@ -417,6 +403,7 @@ app.post('/api/projects', async (req, res) => {
   const profile = selection ? req.scoped.chatProfile(selection) : null;
   if (selection && !profile && options.aiProfile !== 'workspace') throw new HttpError(404, 'This AI model is not available to your account.');
   if (profile && !profile.model) throw new HttpError(400, 'Choose a chat model for this AI profile first.');
+  if (options.engineMode === 'ai' && !profile?.model) throw new HttpError(400, 'Choose an image-capable AI model for AI mode, or select Local mode.');
   ensureSession(req);
   checkQueue(req.account);
   const sharedAiReserved = Boolean(profile && !req.scoped.state.providers.includes(profile));
@@ -472,7 +459,7 @@ app.put('/api/projects/:id/monitor', (req, res) => {
         job.sharedAiReserved = true;
       }
       job.chatProviderId = profile.id;
-      job.options = { ...job.options, aiProfile: profile.id };
+      job.options = { ...job.options, aiProfile: profile.id, ...(job.options.engineMode && { engineMode: 'ai' }) };
     }
     touch(job, { monitor: { ...monitor, mode, canAnalyze: false, analysis: monitor.busy ? monitor.analysis : null } });
   }
@@ -612,7 +599,16 @@ app.get('/media/buffer/:token.mp4', (req, res, next) => {
 
 app.get('/api/captions', (req, res) => res.json(req.scoped.state.jobs.filter((job) => isCaptionJob(job) && job.status !== 'uploading' && !deleting.has(job.id)).map(captionJobPublic)));
 app.post('/api/captions/upload', async (req, res) => {
-  if (!req.is('application/octet-stream') || ![undefined, 'identity'].includes(req.get('content-encoding'))) throw new HttpError(415, 'Send an uncompressed video file.');
+  const inputKind = req.query.source ?? 'video', still = inputKind === 'still';
+  if (!['video', 'still'].includes(inputKind)) throw new HttpError(400, 'Choose a video or a picture and audio.');
+  if (!req.is(still ? 'multipart/form-data' : 'application/octet-stream') || ![undefined, 'identity'].includes(req.get('content-encoding'))) throw new HttpError(415, still ? 'Send the picture and audio together as files.' : 'Send an uncompressed video file.');
+  const engineMode = req.query.engine;
+  if (engineMode !== undefined && !['local', 'ai'].includes(engineMode)) throw new HttpError(400, 'Choose Local or AI captions.');
+  const requestedLanguage = req.query.language;
+  const captionLanguage = typeof requestedLanguage === 'string' && requestedLanguage.toLowerCase() === 'ur-latn' ? romanUrdu : requestedLanguage ?? 'source';
+  if (captionLanguage !== 'source' && (typeof captionLanguage !== 'string' || !Object.hasOwn(languages, captionLanguage))) throw new HttpError(400, 'Choose a supported caption language.');
+  const translatorId = req.query.translator;
+  if (translatorId !== undefined && (engineMode !== 'ai' || captionLanguage === 'source' || typeof translatorId !== 'string' || translatorId.length > 80 || !translatorId)) throw new HttpError(400, 'Choose a saved AI model for caption translation.');
   let setting;
   if (req.query.style !== undefined) {
     if (typeof req.query.style !== 'string' || req.query.style.length > 800) throw new HttpError(400, 'Choose a valid video caption style.');
@@ -620,34 +616,41 @@ app.post('/api/captions/upload', async (req, res) => {
   }
   const style = captionStyleInput(setting);
   const filename = typeof req.query.name === 'string' ? req.query.name.split(/[\\/]/).at(-1).replace(/\p{C}/gu, '') : '';
-  const title = text(filename, 180) || 'Untitled video';
+  const title = text(filename, 180) || (still ? 'Picture and audio' : 'Untitled video');
   const request = responseSignal(res);
   let job;
   try {
     const tools = await toolsStatus();
     request.signal.throwIfAborted();
-    if (!tools.ffmpeg) throw new HttpError(503, 'Install FFmpeg using the Setup guide to caption device videos.');
+    if (!tools.ffmpeg) throw new HttpError(503, 'Install FFmpeg using the Setup guide to generate captions.');
     const choice = req.scoped.state.captions;
-    const profile = choice.model && req.scoped.state.providers.find((item) => item.id === choice.providerId && compatibleProvider(item));
-    if (!profile && !tools.whisper) throw new HttpError(503, 'Install local Whisper or select a timestamped Caption engine in AI provider settings.');
+    const profile = engineMode !== 'local' && choice.model && req.scoped.state.providers.find((item) => item.id === choice.providerId && compatibleProvider(item));
+    if (engineMode === 'ai' && !profile) throw new HttpError(409, 'Configure a timestamped AI Caption engine in Settings → AI Providers, or choose Local.');
+    if (!profile && !tools.whisper) throw new HttpError(503, 'Install Local Whisper or configure a timestamped AI Caption engine.');
+    const translator = translatorId ? req.scoped.chatProfile(translatorId) : null;
+    if (translatorId && !translator?.model) throw new HttpError(404, 'This translation model is not available to your account.');
+    const sharedAi = Boolean(translator && !req.scoped.state.providers.includes(translator));
     checkQueue(req.account);
     const uploading = store.state.jobs.filter((item) => item.status === 'uploading');
-    if (uploading.length >= 3 || uploading.some((item) => item.ownerId === req.account.id)) throw new HttpError(429, 'Another video is uploading. Wait for the upload to finish.');
+    if (uploading.length >= 3 || uploading.some((item) => item.ownerId === req.account.id)) throw new HttpError(429, 'Another media upload is in progress. Wait for it to finish.');
     ensureSession(req);
-    reserveUsage(req.account, { project: true, checkOnly: true });
+    reserveUsage(req.account, { project: true, aiProject: sharedAi, checkOnly: true });
     const now = new Date().toISOString();
-    const captionEngine = profile ? { providerId: profile.id, type: profile.type, baseUrl: profile.baseUrl, model: choice.model } : null;
-    job = { id: randomUUID(), kind: 'captions', ownerId: req.account.id, title, style, captionEngine, status: 'uploading', progress: 0, clips: [], createdAt: now, updatedAt: now };
+    const captionEngine = profile ? { providerId: profile.id, revision: profile.revision || profile.id, type: profile.type, baseUrl: profile.baseUrl, model: choice.model } : null;
+    job = { id: randomUUID(), kind: 'captions', inputKind, engineMode: profile ? 'ai' : 'local', captionLanguage, ownerId: req.account.id, title, style, captionEngine,
+      ...(translator && { translationProfileId: translator.id, translationRevision: translator.revision || translator.id }), status: 'uploading', progress: 0, clips: [], createdAt: now, updatedAt: now };
     store.state.jobs.unshift(job);
     store.save();
     await mkdir(jobDir(job.id), { recursive: true, mode: 0o700 });
-    await receiveVideo(req, captionInputPath(job.id), request.signal);
+    const path = captionInputPath(job.id);
+    if (still) await receiveStill(req, { audio: path, image: captionImagePath(job.id) }, request.signal, maxSourceBytes);
+    else await receiveVideo(req, path, request.signal);
     request.signal.throwIfAborted();
     ensureSession(req);
-    reserveUsage(req.account, { project: true });
-    touch(job, { status: 'queued', detail: 'Waiting for the media worker.' });
+    reserveUsage(req.account, { project: true, aiProject: sharedAi });
+    touch(job, { status: 'queued', detail: captionWorker ? 'Upload saved. Waiting for the caption worker.' : 'Upload saved. Caption processing is starting.' });
     res.status(202).json(captionJobPublic(job));
-    queueMicrotask(work);
+    queueMicrotask(workCaptions);
   } catch (error) {
     if (job) {
       store.state.jobs = store.state.jobs.filter((item) => item !== job);
@@ -664,16 +667,16 @@ app.post('/api/captions/:id/render', async (req, res) => {
   const style = captionStyleInput(req.body?.style);
   const tools = await toolsStatus();
   if (!store.state.jobs.includes(job) || deleting.has(job.id)) throw new HttpError(404, 'This caption project could not be found.');
-  if (!job.trackReady || current?.job === job || activeStatuses.has(job.status)) throw new HttpError(409, 'Wait for the current caption task to finish.');
+  if (!job.trackReady || captionWorker?.job === job || activeStatuses.has(job.status)) throw new HttpError(409, 'Wait for the current caption task to finish.');
   if (!tools.subtitles) throw new HttpError(503, 'Install FFmpeg with libass to render a styled MP4.');
   checkQueue(req.account);
   touch(job, { style, status: 'queued', detail: 'Waiting to render the new style.', progress: 0, error: null });
   res.status(202).json(captionJobPublic(job));
-  queueMicrotask(work);
+  queueMicrotask(workCaptions);
 });
 app.post('/api/captions/:id/cancel', async (req, res) => {
   const job = captionById(req);
-  if (current?.job === job && activeStatuses.has(job.status)) current.ctrl.abort(new Error('Caption task stopped.'));
+  if (captionWorker?.job === job && activeStatuses.has(job.status)) captionWorker.ctrl.abort(new Error('Caption task stopped.'));
   else if (job.status === 'queued') {
     touch(job, { status: 'cancelled', detail: 'Caption task removed from the queue.' });
     if (!job.trackReady) await rm(jobDir(job.id), { recursive: true, force: true });
@@ -691,9 +694,9 @@ app.get('/api/captions/:id/:file', (req, res, next) => {
   else res.sendFile(path, { dotfiles: 'allow' }, done);
 });
 
-for (const skill of ['reach', 'finder']) app.post(`/api/chat/${skill}`, async (req, res) => {
+app.post('/api/chat/reach', async (req, res) => {
   if (!discoveryEnabled) throw new HttpError(503, 'Public search is disabled by the server administrator.');
-  const input = discoveryInput(skill, req.body);
+  const input = discoveryInput(req.body);
   const { reviewProfileId, reviewRevision } = req.body;
   let review;
   if (reviewProfileId !== undefined) {
@@ -716,7 +719,7 @@ for (const skill of ['reach', 'finder']) app.post(`/api/chat/${skill}`, async (r
   request.signal.addEventListener('abort', releaseSearch, { once: true });
   try {
     const result = await discover(input, request.signal, review);
-    if (!request.signal.aborted) res.json({ ...result, ...(skill === 'finder' && result.records.length ? { workbook: finderWorkbook(result) } : {}) });
+    if (!request.signal.aborted) res.json(result);
   } catch (error) { if (!request.signal.aborted) throw error; }
   finally { request.release(); request.signal.removeEventListener('abort', releaseSearch); releaseSearch(); }
 });
@@ -750,28 +753,17 @@ app.post('/api/chat', async (req, res) => {
     return chatWithProvider({ ...profile }, store, messages, signal);
   });
 });
-app.post('/api/chat/apps', async (req, res) => {
-  const { providerId, messages } = chatInput(req.body);
-  const profile = chatProfile(req, providerId, true), revision = profile.revision || profile.id;
-  const { connectionId } = req.body;
-  if (typeof connectionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(connectionId)) throw new HttpError(400, 'Choose one of your connected app accounts.');
-  const ensure = () => {
-    ensureSession(req);
-    if (req.scoped.chatProfile(providerId) !== profile || (profile.revision || profile.id) !== revision) throw new HttpError(409, 'The selected model changed. Refresh your workspace.');
-  };
-  await chatRequest(req, res, (signal) => appChat.plan({
-    account: req.account, sessionKey: auth.sessionKey(req), profile: { ...profile }, messages, connectionId, ensure, signal,
-    charge: () => chargeMessage(req, profile),
-  }));
+app.post('/api/chat/workflows', (req, res) => {
+  networkLimit(`workflow-review:${req.account.id}`, 20);
+  ensureSession(req);
+  res.json({ review: n8n.review(req.account, auth.sessionKey(req), req.body?.message) });
 });
-app.post('/api/chat/apps/actions/:id', async (req, res) => {
-  if (req.body?.approved !== true || Object.keys(req.body).length !== 1) throw new HttpError(400, 'Review and approve this exact app action first.');
-  await chatRequest(req, res, (signal) => appChat.run({
-    account: req.account, sessionKey: auth.sessionKey(req), id: req.params.id, ensure: () => ensureSession(req), getProfile: (id) => req.scoped.chatProfile(id), signal,
-  }));
+app.post('/api/chat/workflows/:id', async (req, res) => {
+  if (req.body?.approved !== true || Object.keys(req.body).length !== 1) throw new HttpError(400, 'Review and approve this exact workflow input first.');
+  await chatRequest(req, res, (signal) => n8n.run(req.account, auth.sessionKey(req), req.params.id, () => ensureSession(req), signal));
 });
-app.delete('/api/chat/apps/actions/:id', (req, res) => {
-  appChat.cancel(req.account, auth.sessionKey(req), req.params.id);
+app.delete('/api/chat/workflows/:id', (req, res) => {
+  n8n.cancel(req.account, auth.sessionKey(req), req.params.id);
   res.status(204).end();
 });
 
@@ -827,7 +819,7 @@ app.put('/api/settings/captions', (req, res) => {
   store.save();
   res.json(req.scoped.state.captions);
 });
-const requireLegacySetup = (_req, _res, next) => legacySetup ? next() : next(new HttpError(410, 'New app setup has moved to Composio in Settings → Integrations.'));
+const requireLegacySetup = (_req, _res, next) => legacySetup ? next() : next(new HttpError(410, 'New generic MCP setup is disabled. Use the reviewed n8n workflow in Chat.'));
 app.get('/api/mcp', (req, res) => res.json(req.scoped.state.mcps.map(publicMcp)));
 app.post('/api/mcp', requireLegacySetup, (req, res) => {
   const profile = mcpInput(req.body || {}, null, store);
@@ -870,18 +862,30 @@ app.post('/api/mcp/:id/channels', async (req, res) => {
   res.json(await listBufferChannels(bufferFor(req, req.params.id), store, req.body?.organizationId));
 });
 
-const sites = ['google', 'tiktok'];
-for (const site of sites) {
-  app.put(`/api/${site}/config`, requireLegacySetup, (req, res) => res.json(connections(req.account)[site].configure(req.body || {})));
-  app.post(`/api/${site}/connect`, requireLegacySetup, (req, res) => {
+for (const site of ['google', 'tiktok']) {
+  app.put(`/api/${site}/config`, (req, res) => {
+    ensureSession(req);
+    if (req.account.role !== 'admin') throw new HttpError(403, 'Only the administrator can set up the OAuth app.');
+    const redirectUri = publicOrigin ? `${publicOrigin}/api/${site}/callback` : req.body?.redirectUri;
+    res.json(connections(req.account)[site].configure({ ...req.body, redirectUri }));
+  });
+  app.post(`/api/${site}/connect`, (req, res) => {
+    networkLimit(`oauth:${site}:${req.account.id}`, 8);
     const origin = req.get('origin') || publicOrigin || `${secure(req) ? 'https' : 'http'}://${req.get('host')}`;
-    const service = connections(req.account)[site];
-    const result = site === 'google' ? service.connect(req.body?.targets, origin) : { url: service.connect(origin), secure: true };
+    if (origin.startsWith('https:') && !secure(req)) throw new HttpError(403, 'Open Curiousity through its trusted HTTPS proxy before connecting an account.');
+    const service = connections(req.account)[site], session = auth.sessionKey(req);
+    const result = site === 'google' ? service.connect(req.body?.targets, origin, session) : { url: service.connect(origin, session), secure: true };
     res.cookie(`cf_${site}_state`, result.state || new URL(result.url).searchParams.get('state'), { secure: result.secure, httpOnly: true, sameSite: 'lax', maxAge: 600_000, path: `/api/${site}/callback` });
     res.json({ url: result.url });
   });
-  app.post(`/api/${site}/disconnect`, (req, res) => { const service = connections(req.account)[site]; service.disconnect(site === 'tiktok' ? req.body?.accountId : undefined); res.json(service.describe()); });
+  app.post(`/api/${site}/disconnect`, (req, res) => {
+    const service = connections(req.account)[site];
+    service.disconnect(site === 'tiktok' ? req.body?.accountId : undefined);
+    res.json(socialView(service, req.account));
+  });
 }
+app.use(['/api/composio', '/api/admin/composio', '/api/chat/apps'], (_req, _res, next) => next(new HttpError(410, 'Composio was replaced by Chat → Workflows.')));
+app.post('/api/chat/finder', () => { throw new HttpError(410, 'LinkedIn and Google Maps Finder has been retired. Reach is still available in Chat.'); });
 app.use('/api', (_req, res) => res.status(404).json({ error: 'No Curiousity API route matches this path and HTTP method.', code: 'API_ROUTE_NOT_FOUND' }));
 
 const watcher = dev ? await (await import('../scripts/build.mjs')).buildWeb({ watch: true }) : null;
@@ -899,13 +903,14 @@ app.use((error, _req, res, next) => {
 server.listen(port, host, () => {
   console.log(`Curiousity listening on http://${host}:${server.address().port}`);
   queueMicrotask(work);
+  queueMicrotask(workCaptions);
 });
 for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => {
   closing = true;
-  composio.stop();
-  appChat.stop();
+  n8n.stop();
   clearTimeout(replayTimer);
   current?.ctrl.abort(new Error('Server is stopping.'));
+  captionWorker?.ctrl.abort(new Error('Server is stopping.'));
   server.close(() => { if (watcher) watcher.dispose().finally(() => process.exit(0)); else process.exit(0); });
   setTimeout(() => process.exit(0), 4500).unref();
 });

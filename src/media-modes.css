@@ -1,0 +1,17 @@
+.media-mode-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.media-mode-choice button { display: flex; align-items: flex-start; gap: 9px; min-width: 0; text-align: left; padding: 10px; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 9px; }
+.media-mode-choice svg { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
+.media-mode-choice button[aria-pressed=true] { border-color: var(--lime); background: color-mix(in srgb, var(--lime) 10%, var(--field)); }
+.media-mode-choice button[aria-pressed=true] svg { color: var(--lime); }
+.media-mode-choice strong, .media-mode-choice small { display: block; }
+.media-mode-choice small { margin-top: 3px; color: var(--muted); font-size: .72rem; line-height: 1.35; }
+.studio-media-mode { margin: 16px 0 10px; }
+.studio-media-mode .field-label { display: block; margin-bottom: 7px; }
+.caption-source-choices { display: flex; gap: 7px; padding: 0 16px 12px; flex-wrap: wrap; }
+.caption-source-choices [aria-pressed=true] { border-color: var(--lime); color: var(--lime); }
+.caption-file-stack { display: grid; }
+.caption-source-options { display: grid; gap: 12px; padding: 13px 16px; border-top: 1px solid var(--line); }
+.caption-source-selects { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); }
+.caption-source-options .form-field { margin: 0; }
+.caption-monitor .monitor-frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.caption-still-note { font-size: .74rem; color: var(--muted); margin: 0; }

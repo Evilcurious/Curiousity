@@ -133,11 +133,10 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
     setError(''); setBusy(action);
     try {
       if (action === 'delete') await removeProject(job.id);
-      else if (action === 'retry') {
-        const { aiProfile } = job.options;
-        const unavailable = workspace && aiProfile && !['local', 'workspace'].includes(aiProfile) && !([...workspace.providers, ...workspace.sharedProviders].some((profile) => profile.id === aiProfile && profile.model));
-        await createProject(unavailable ? { ...job.options, aiProfile: 'local' } : job.options);
-        if (unavailable) notify('That AI profile is no longer available. Retrying with local analysis.');
+      else if (action === 'retry' || action === 'retry-local') {
+        const local = action === 'retry-local';
+        if (!job.options.demo && workspace?.mediaModes !== true) throw new Error('Connect to the updated Curiousity engine before retrying.');
+        await createProject(local ? { ...job.options, engineMode: 'local', aiProfile: 'local' } : job.options);
       }
       else {
         const route = action === 'status' ? `/clips/${clip.id}/tiktok/check` : `/${action}`;
@@ -155,7 +154,7 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
       {!active && !uploading && !monitorOpen && <button className="icon-button" onClick={() => { setError(''); setConfirm('delete'); }} title="Delete project" aria-label="Delete project"><Trash2 size={17}/></button>}
     </PageHeading>
     {monitorOpen ? <LiveMonitor job={job} workspace={workspace} onUpdate={updateProject} notify={notify}/> : active && <Processing job={job} onCancel={() => { setError(''); setConfirm('cancel'); }}/>}
-    {!active && !ready && !monitorOpen && <section className="panel failure-panel"><Glyph icon={CircleAlert}/><div><h2>{job.status === 'cancelled' ? job.monitor ? 'Project ended' : 'Project stopped' : 'Couldn’t finish this project'}</h2><p>{job.detail}</p><div className="failure-actions"><Button icon={RefreshCw} tone="primary" busy={busy === 'retry'} onClick={() => runAction('retry')}>Try again</Button><ActionLink href="#/studio">Back to studio</ActionLink></div></div></section>}
+    {!active && !ready && !monitorOpen && <section className="panel failure-panel"><Glyph icon={CircleAlert}/><div><h2>{job.status === 'cancelled' ? job.monitor ? 'Project ended' : 'Project stopped' : 'Couldn’t finish this project'}</h2><p>{job.detail}</p><div className="failure-actions"><Button icon={RefreshCw} tone="primary" busy={busy === 'retry'} onClick={() => runAction('retry')}>Try again</Button>{job.options.engineMode === 'ai' && <Button busy={busy === 'retry-local'} disabled={Boolean(busy)} onClick={() => runAction('retry-local')}>Try Local instead</Button>}<ActionLink href="#/studio">Back to studio</ActionLink></div></div></section>}
     {job.warnings?.map((warning, index) => <Banner key={index} tone="warning" icon={Info}>{warning}</Banner>)}
     {!!job.clips.length && <>
       {canDeliver && job.sourceKind !== 'shared' && <div className="panel share-bar library-share-bar"><Glyph icon={job.sharedAt ? Users : LockKeyhole}/><div><h3>{job.sharedAt ? 'Shared in the Clip Library' : 'These clips are private'}</h3><p>{job.sharedAt ? 'Members can preview and save the finished exports.' : 'Only you can open this project. Share the exports when you’re ready.'}</p></div><Button onClick={() => setLibraryReview(true)} icon={job.sharedAt ? null : Users}>{job.sharedAt ? 'Stop sharing' : 'Share to library'}</Button></div>}
@@ -164,7 +163,7 @@ export function Project({ job, loadError, loading, workspace, updateProject, rem
         {job.options.captionStyle && job.clips.some((clip) => clip.burnedCaptions) && <p className="export-style-summary"><Captions size={13}/>{styleLabel} · Burned into MP4</p>}
       </div><JobBadge state={monitorOpen ? 'monitorOpen' : job.status}/></div>
       {canShare && <div className="panel share-bar"><Glyph icon={TikTokIcon}/><div><h3>TikTok drafts</h3><p>{job.options.tiktok ? 'Select the clips you want to send, then review and approve the batch.' : 'Choose clips to send to your TikTok inbox.'}</p></div><Button tone={shareCount ? 'primary' : 'neutral'} icon={ArrowRight} disabled={!shareCount} onClick={() => setReview(true)}>{shareCount ? `Review ${shareCount} selected` : 'Review selected'}</Button></div>}
-      {job.options.tiktok && !canShare && canDeliver && <Banner tone="warning" icon={TikTokIcon}>This project no longer has an eligible legacy TikTok connection. Download your clips to upload them yourself.</Banner>}
+      {job.options.tiktok && !canShare && canDeliver && <Banner tone="warning" icon={TikTokIcon}>This project no longer has an eligible TikTok connection. Download your clips to upload them yourself.</Banner>}
       <div className="clips-grid">{job.clips.map((clip, index) => <ClipCard key={clip.id} clip={clip} index={index} onPlay={() => setPreview(clip.id)} canShare={canShare} selected={selected.has(clip.id)} select={(checked) => setSelected((entries) => { const next = new Set(entries); if (checked) next.add(clip.id); else next.delete(clip.id); return next; })} onCheck={() => runAction('status', clip)} onGoogle={canDeliver && availableDestinations(job, clip, google).length ? () => setGoogleReview(clip.id) : null} onBuffer={canDeliver && buffers.length > 0 && (!clip.bufferDraft || clip.bufferDraft.state === 'failed') ? () => setBufferReview(clip.id) : null} notify={notify}/>)}</div>
     </>}
     {libraryReview && <LibraryShareReview job={job} onClose={() => setLibraryReview(false)} onUpdate={updateProject} notify={notify}/>}

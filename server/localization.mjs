@@ -1,12 +1,14 @@
 import { languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { translateWithProvider } from './providers.mjs';
+import { HttpError } from './validation.mjs';
 import { isLatinCaption, romanizeUrdu } from './roman-urdu.mjs';
 
 export async function localizeClips({ original, sourceLanguage, target, provider, store, tryTrack, tryEnglish, signal }) {
   const fallback = { tracks: original, language: sourceLanguage || null };
   const isRoman = (tracks) => tracks.every((rows) => rows.every(({ text }) => isLatinCaption(text)));
   const normalize = (value) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-  const justCopied = (tracks) => !['ur', romanUrdu].includes(sourceLanguage) && original.some((rows) => rows.some(({ text }) => normalize(text).length > 12))
+  const checkCopied = target === romanUrdu ? !['ur', romanUrdu].includes(sourceLanguage) : sourceLanguage && sourceLanguage !== target;
+  const justCopied = (tracks) => checkCopied && original.some((rows) => rows.some(({ text }) => normalize(text).length > 12))
     && tracks.every((rows, i) => rows.every((cue, j) => normalize(cue.text) === normalize(original[i][j].text)));
   if (!target || target === 'source' || (target === sourceLanguage && (target !== romanUrdu || isRoman(original)))) return fallback;
   const usable = (result) => result && result.tracks.some((rows) => rows.length) && result.tracks.every((rows, i) => !original[i].length || rows.length);
@@ -15,11 +17,16 @@ export async function localizeClips({ original, sourceLanguage, target, provider
   }
   const fromTrack = await tryTrack(target);
   if (usable(fromTrack) && (target !== romanUrdu || isRoman(fromTrack.tracks))) return { ...fromTrack, language: target };
+  let failure;
   if (provider?.model && original.some((rows) => rows.length)) {
     try {
       const tracks = await translateWithProvider(provider, store, target, original, signal);
-      if (target !== romanUrdu || !justCopied(tracks)) return { tracks, language: target, label: `${provider.name} translation` };
-    } catch (error) { if (signal?.aborted) throw signal.reason; }
+      if (!justCopied(tracks)) return { tracks, language: target, label: `${provider.name} translation` };
+      failure = 'The model copied the source captions instead of translating them.';
+    } catch (error) {
+      signal?.throwIfAborted();
+      failure = error instanceof HttpError ? error.message : 'The translation request could not be completed.';
+    }
   }
   if (target === romanUrdu) {
     const urdu = ['ur', romanUrdu].includes(sourceLanguage) && original.some((rows) => rows.length) ? { tracks: original } : await tryTrack('ur');
@@ -34,9 +41,11 @@ export async function localizeClips({ original, sourceLanguage, target, provider
     const english = await tryEnglish();
     if (usable(english)) return { ...english, language: 'en' };
   }
+  const advice = failure || 'Select an AI chat model in AI mode when a translated track is unavailable.';
+  const englishHint = target === 'en' ? (tryEnglish ? ' Local Whisper did not produce English captions either.' : ' Install multilingual Local Whisper for English translation on this server.') : '';
   return { ...fallback, warning: original.some((rows) => rows.length)
-    ? `Could not produce ${languageLabel(target)} captions. Original captions were used.${provider?.model ? ' The selected provider did not return a usable translation.' : ' Select an AI chat model in AI Providers when a translated source track is unavailable.'}`
-    : `No usable captions were available in ${languageLabel(target)}.` };
+    ? `Could not produce ${languageLabel(target)} captions. Original captions were used. ${advice}${englishHint}`
+    : `No usable captions were available in ${languageLabel(target)}.${englishHint}` };
 }
 
 const tags = {

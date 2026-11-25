@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createStore } from '../server/store.mjs';
-import { listModels, providerInput, publicProvider, rankWithProvider, transcribeRemote } from '../server/providers.mjs';
+import { listModels, providerInput, publicProvider, rankWithProvider, transcribeRemote, translateWithProvider } from '../server/providers.mjs';
 import { providerCatalog } from '../shared/providers.mjs';
 
 test('encrypts provider keys at rest and never exposes them in profiles', async (t) => {
@@ -41,6 +41,65 @@ test('lists compatible models and constrains remote ranking to real moment IDs',
   assert.equal(mock.mock.callCount(), 2);
 });
 
+
+test('retries a cut-off visual ranking once with the same evidence and validates wrapped results', async (t) => {
+  const profile = { type: 'custom', name: 'Vision', baseUrl: 'https://models.example', model: 'vision', apiKey: 'fixture-ranked-key' };
+  const candidates = [{ id: 'm1', start: 4, end: 24, excerpt: 'Video evidence, not just words.', score: 65 }];
+  const visual = { source: { duration: 32 }, images: [{ id: 'm1', label: 'm1, 5.20s in the video', data: 'cGljdHVyZQ==' }] };
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    bodies.push(JSON.parse(body));
+    if (bodies.length === 1) return Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"rankings":[{"id":"m1"' } }] });
+    const wrapped = JSON.stringify({ rankings: [{ id: 'made-up', score: 100 }, { id: 'm1', score: '94', start: 999, end: 2000, title: 'Source highlight' }] });
+    const answer = ['<think>Consider these [untrusted thoughts].</think>', 'Here is the ranking:', '```json', wrapped, '```'].join('\n');
+    return Response.json({ choices: [{ message: { content: answer } }] });
+  });
+  const result = await rankWithProvider(profile, { unseal: (key) => key }, candidates, undefined, null, visual);
+  assert.deepEqual([...result], [['m1', { score: 94, title: 'Source highlight', reason: '' }]]);
+  assert.equal(bodies.length, 2);
+  const [original, retry] = bodies;
+  assert.deepEqual(original.messages[1], retry.messages[1], 'never switch to text-only ranking on repair');
+  assert.match(retry.messages[0].content, /only id and score/);
+  assert.match(retry.messages[1].content[2].image_url.url, /^data:image\/jpeg;base64,/);
+});
+
+test('shows actionable provider errors without retrying rejected requests or exposing upstream text', async (t) => {
+  const profile = { type: 'custom', name: 'Vision', baseUrl: 'https://models.example', model: 'vision', apiKey: 'fixture-ranked-key' };
+  const store = { unseal: (key) => key };
+  const candidate = { id: 'm1', start: 0, end: 20, excerpt: 'Caption example.', score: 65 };
+  let upstream;
+  const mock = t.mock.method(globalThis, 'fetch', async () => upstream());
+  for (const [status, hint] of [[401, /HTTP 401.*saved API key/], [400, /HTTP 400.*input/], [429, /HTTP 429.*quota/]]) {
+    upstream = () => Response.json({ error: 'This body contains a private message.' }, { status });
+    const before = mock.mock.callCount();
+    await assert.rejects(rankWithProvider(profile, store, [candidate]), (err) => err.providerStatus === status && hint.test(err.message) && !err.message.includes('private message'));
+    assert.equal(mock.mock.callCount(), before + 1);
+  }
+  upstream = () => Response.json({ choices: [{ finish_reason: 'content_filter', message: { content: '[{"id":"m1","score":94}]' } }] });
+  await assert.rejects(rankWithProvider(profile, store, [candidate]), /provider declined/);
+  assert.equal(mock.mock.callCount(), 4);
+  await assert.rejects(rankWithProvider(profile, store, [candidate], AbortSignal.abort(new Error('Cancelled'))), /Cancelled/);
+  assert.equal(mock.mock.callCount(), 4, 'an already cancelled job does not send a provider request');
+});
+
+test('a cut-off translation uses smaller bounded requests and preserves every timestamp', async (t) => {
+  const profile = { type: 'gemini', name: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'translation-fixture' };
+  const original = [Array.from({ length: 16 }, (_, i) => ({ start: i, end: i + .7, text: `Ejemplo ${i}.` }))];
+  const batches = [];
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    const { contents, generationConfig } = JSON.parse(body);
+    assert.equal(generationConfig.responseMimeType, 'application/json');
+    const cues = JSON.parse(contents[0].parts[0].text);
+    batches.push(cues.map(({ id }) => id));
+    if (cues.length === 16) return Response.json({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: '{"translations":[' }] } }] });
+    const answer = JSON.stringify({ translations: cues.reverse().map(({ id }) => ({ id, text: `Example ${id.split(':')[1]}.` })) });
+    return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Internal thoughts [not a result]', thought: true }, { text: answer }] } }] });
+  });
+  const result = await translateWithProvider(profile, { unseal: () => '' }, 'en', original);
+  assert.deepEqual(result, [original[0].map((cue, i) => ({ ...cue, text: `Example ${i}.` }))]);
+  assert.deepEqual(batches.map((batch) => batch.length), [16, 8, 8]);
+  assert.deepEqual(batches.slice(1).flat(), batches[0]);
+});
 
 test('remote transcription keeps detected caption language and per-chunk timestamps', async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'cf-language-'));

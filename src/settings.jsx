@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Captions, Check, ChevronDown, Clipboard, Cpu, Crown, Download, KeyRound, Plus, RefreshCw, Search, Server, ShieldCheck, Sparkles, Terminal, Trash2, Unplug } from 'lucide-react';
 import { ActionLink, api, Banner, Button, Confirm, EmptyState, Glyph, Modal, PageHeading, PanelHeading } from './ui.jsx';
-import { ConnectedApps } from './composio.jsx';
+import { SocialConnections } from './social-oauth.jsx';
 import { providerCatalog as providers } from '../shared/providers.mjs';
 
 import { Field, PasswordInput, Select } from './forms.jsx';
@@ -92,7 +92,7 @@ export function Providers({ user, workspace, refresh, notify }) {
         {captionId && <Field label="Transcription model" hint="Must support verbose_json with segment timestamps."><input value={captionModel} onChange={(event) => setCaptionModel(event.target.value)} maxLength={160} spellCheck="false" placeholder="e.g. whisper-1" required/></Field>}
         <Button type="submit" busy={busy === 'captions'} icon={Check}>Save transcription</Button>
       </form>
-      <p className="privacy-note"><ShieldCheck size={16}/> External models may receive transcript excerpts or audio and incur usage costs. Keep Local analysis and Local Whisper selected to avoid sending content to AI providers.</p>
+      <p className="privacy-note"><ShieldCheck size={16}/> External models may receive video frames, video previews, transcripts or audio and incur usage costs. Keep Local analysis and Local Whisper selected to avoid sending content to AI providers.</p>
     </section>
     {dialog && <ProviderDialog allowLocal={isAdmin} existing={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSaved={(message) => { if (dialog === 'new') resetFilter(); setDialog(null); refresh(); notify(message); }}/>}
     {shareConfirm && <Modal title="Share this chat model" subtitle={`${shareConfirm.name} · Usage can be billed to your provider account. Members never see your key or endpoint.`} onClose={() => { if (!busy) setShareConfirm(null); }}>
@@ -102,18 +102,13 @@ export function Providers({ user, workspace, refresh, notify }) {
         <div className="modal-actions"><Button onClick={() => setShareConfirm(null)} disabled={Boolean(busy)}>Cancel</Button><Button type="submit" tone="primary" busy={Boolean(busy)}>Save sharing</Button></div>
       </form>
     </Modal>}
-    {confirm && <Confirm title={`Remove ${confirm.name}?`} message="This removes the saved key. If this was your workspace default or transcription engine, new projects will use the local engine instead." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
+    {confirm && <Confirm title={`Remove ${confirm.name}?`} message="This removes the saved key. If this was your workspace default or transcription engine, you’ll need to pick another provider or switch to Local for new AI projects." label="Remove profile" onClose={() => setConfirm(null)} busy={busy === 'remove'} error={error} onConfirm={() => run('remove', () => api(`/providers/${confirm.id}`, { method: 'DELETE' }), 'Provider removed.')}/>}
   </div>;
 }
 
 function SavedDestinations({ workspace, refresh, notify }) {
   const [removing, setRemoving] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const google = workspace?.google;
-  const destinations = [
-    ...(google?.connected || google?.hasSavedAccount ? [{ label: google.connected ? `Google · ${google.account.name}` : 'Google (legacy)', copy: google.connected ? 'Drive and private YouTube delivery' : 'No longer authorized for clip delivery', route: '/google/disconnect', method: 'POST' }] : []),
-    ...(workspace?.tiktok?.accounts || []).map((row) => ({ label: `TikTok · ${row.name}`, copy: row.available ? 'Reviewed inbox drafts' : 'Paused by your account’s plan limit', route: '/tiktok/disconnect', method: 'POST', body: { accountId: row.id } })),
-    ...(workspace?.mcps || []).map((row) => ({ label: row.name, copy: row.kind === 'buffer' ? 'Buffer clip drafts with this saved credential' : 'Archived MCP profile; not available in Chat', route: `/mcp/${row.id}`, method: 'DELETE' })),
-  ];
+  const destinations = (workspace?.mcps || []).map((row) => ({ label: row.name, copy: row.kind === 'buffer' ? 'Buffer clip drafts with this saved credential' : 'Archived MCP profile; not available in Chat', route: `/mcp/${row.id}`, method: 'DELETE' }));
   if (!destinations.length) return null;
   async function remove() {
     setBusy(true); setError('');
@@ -123,18 +118,19 @@ function SavedDestinations({ workspace, refresh, notify }) {
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   }
-  return <details className="panel service-panel composio-legacy"><summary>Previously saved integrations</summary>
-    <p>Previously connected clip destinations still work from finished projects while their authorizations remain valid. New app connections use Composio and are separate from clip uploads. Old credentials aren’t transferred to Composio.</p>
-    {destinations.map((row, index) => <div className="connection-row composio-legacy-row" key={`${row.route}:${row.body?.accountId || index}`}><div><strong>{row.label}</strong><p>{row.copy}</p></div><Button icon={Unplug} aria-label={`Remove ${row.label}`} onClick={() => { setRemoving(row); setError(''); }}>Remove</Button></div>)}
+  return <details className="panel service-panel saved-integrations"><summary>Previously saved MCP and Buffer connections</summary>
+    <p>Previously saved Buffer credentials can still deliver clip drafts. Saved credentials are not sent to n8n.</p>
+    {destinations.map((row, index) => <div className="connection-row saved-integration-row" key={`${row.route}:${row.body?.accountId || index}`}><div><strong>{row.label}</strong><p>{row.copy}</p></div><Button icon={Unplug} aria-label={`Remove ${row.label}`} onClick={() => { setRemoving(row); setError(''); }}>Remove</Button></div>)}
     {removing && <Confirm title={`Remove ${removing.label}?`} message="The saved account credential will be removed from Curiousity. Check the provider’s settings to revoke the grant too. Files and drafts already sent stay at their destination." label="Remove connection" onClose={() => { if (!busy) setRemoving(null); }} onConfirm={remove} busy={busy} error={error}/>}
   </details>;
 }
 
-export function Integrations({ user, workspace, refresh, notify, notice, composioNotice }) {
+export function Integrations({ user, workspace, refresh, notify, notice }) {
   return <div className="view-enter">
     <PageHeading label="WORKSPACE / CONNECTIONS" title="Integrations" subtitle="Connect and manage the app accounts you use with Curiousity."/>
-    <ConnectedApps user={user} ready={workspace?.composio?.ready} notice={composioNotice}/>
     {notice && <Banner tone="info">{notice}</Banner>}
+    <SocialConnections user={user} workspace={workspace} refresh={refresh} notify={notify}/>
+    <section className="panel service-panel integration-panel"><PanelHeading icon={Server} title="n8n" description={workspace?.n8n?.enabled ? `Available in Chat: ${workspace.n8n.name}` : 'Workflows are enabled by your administrator.'}><ActionLink href="#/chat?workflows=1">Open Workflows</ActionLink></PanelHeading></section>
     <SavedDestinations workspace={workspace} refresh={refresh} notify={notify}/>
   </div>;
 }
@@ -155,7 +151,7 @@ export function Setup({ workspace, refresh, notify }) {
     <div className="setup-grid"><section className="panel service-panel"><PanelHeading icon={Terminal} title="Run locally" description="Node.js 22+, Python 3.10+ and a terminal."/><p className="setup-copy">From the repository folder, install the website and media tools. Then open <code>http://localhost:5173</code>.</p><CommandBlock notify={notify}>{'npm ci\nnpm run setup\nnpm run dev'}</CommandBlock><p className="setup-copy">The first local transcription downloads the Whisper model. To fetch it ahead of time, run <code>npm run setup -- --download-model</code>.</p></section>
     <section className="panel service-panel"><PanelHeading icon={Server} title="Run on a VPS" description="Run as a Node service. No Docker required."/><p className="setup-copy">Set up HTTPS and provision the administrator locally with a fresh secret. See the README for the exact steps.</p><CommandBlock notify={notify}>{'cp .env.example .env\n# Configure PUBLIC_ORIGIN and TRUST_PROXY\n# Provision the admin with npm run admin\nnpm ci\nnpm run setup\nnpm run build\nnpm start'}</CommandBlock><p className="setup-copy">Proxy the app through HTTPS and keep port 5173 private. See the repository README for example deployment and data backup instructions.</p></section></div>
     <section className="panel service-panel how-to-panel"><PanelHeading icon={Captions} title="Try the caption tools" description="No YouTube link or API key needed for the sample."/><ol><li>In <a href="#/studio">Studio</a>, choose <b>Auto</b> under Number of clips and set Caption language to <b>Roman Urdu</b>.</li><li>Open <b>Caption style → Customize</b> to preview fonts, effects, and in/out animations. Apply your style, then click <b>Try demo</b>.</li><li>Download an MP4 with burned-in styling, or a plain-text SRT. For your own videos, choose an AI provider profile to translate other languages into Roman Urdu when no suitable caption track is available.</li></ol></section>
-    <section className="panel service-panel how-to-panel"><PanelHeading icon={Search} title="Set up Reach and Finder" description="Public discovery in Chat is separate from your AI profiles."/><ol><li>Allow the server to reach the hosted Exa search service at <code>mcp.exa.ai</code> over HTTPS. It can work without a key, subject to free limits.</li><li>For your own Exa quota, set <code>EXA_API_KEY</code> in the server’s environment and allow access to <code>api.exa.ai</code>. An optional <code>YOUTUBE_DATA_API_KEY</code> enables total views for recent YouTube matches. Keep these keys on the server.</li><li>Restart Curiousity after changing the environment. Search skips undated or unconfirmed listings. With AI review on, your selected personal Chat model reviews every match that passes those checks. Without a model, the tools show Source checks only.</li></ol></section>
+    <section className="panel service-panel how-to-panel"><PanelHeading icon={Search} title="Set up Reach" description="Public discovery in Chat is separate from your AI profiles."/><ol><li>Allow the server to reach the hosted Exa search service at <code>mcp.exa.ai</code> over HTTPS. It can work without a key, subject to free limits.</li><li>For your own Exa quota, set <code>EXA_API_KEY</code> in the server’s environment and allow access to <code>api.exa.ai</code>. An optional <code>YOUTUBE_DATA_API_KEY</code> enables total views for recent YouTube matches. Keep these keys on the server.</li><li>Restart Curiousity after changing the environment. Search skips undated or unconfirmed results. With AI review on, your selected personal Chat model reviews every match that passes those checks. Without a model, the tools show Source checks only.</li></ol></section>
     <section className="panel service-panel tool-panel"><PanelHeading icon={Download} title="System checks" description="Tools detected on this server."><Button icon={RefreshCw} busy={busy} onClick={check}>Recheck</Button></PanelHeading><div className="tool-list">{[['FFmpeg', online?.ffmpeg, 'Reads and renders media'], ['yt-dlp', online?.ytDlp, 'Imports authorized YouTube sources'], ['Burned captions', online?.subtitles, 'FFmpeg libass subtitle filter'], ['Whisper', online?.whisper, 'Local speech recognition package']].map(([title, ready, detail]) => <div key={title}><div><strong>{title}</strong><p>{detail}</p></div><span className={`badge ${ready ? 'badge-green' : ''}`}><i/>{ready ? 'Installed' : ready === false ? 'Not found' : 'Unknown'}</span></div>)}</div></section>
   </div>;
 }

@@ -35,9 +35,9 @@ function readRoute() {
   const [page, id] = raw.split('/');
   const params = new URLSearchParams(query);
   if (page === 'project' && id) return { page, id };
-  if (page === 'settings' || page === 'providers' || page === 'integrations') return { page: 'settings', tab: page === 'settings' ? (id === 'mcp' ? 'integrations' : sections.find((section) => section.id === id)?.id) : page, notice: params.get('notice'), composioNotice: params.get('composio'), showPlans: params.get('plans') === '1' };
+  if (page === 'settings' || page === 'providers' || page === 'integrations') return { page: 'settings', tab: page === 'settings' ? (id === 'mcp' ? 'integrations' : sections.find((section) => section.id === id)?.id) : page, notice: params.get('notice'), showPlans: params.get('plans') === '1' };
   if (page === 'library') return { page, shared: id === 'shared' };
-  if (page === 'chat') return { page, showApps: params.get('apps') === '1', composioNotice: params.get('composio') };
+  if (page === 'chat') return { page, showWorkflows: params.get('workflows') === '1' || params.get('apps') === '1' };
   return { page: ['setup', 'captions', 'chat'].includes(page) ? page : 'studio' };
 }
 
@@ -173,9 +173,9 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
     switch (route.tab) {
       case 'account': return <AccountSettings user={user} workspace={workspace} showPlans={route.showPlans} signOut={signOut} signingOut={signingOut} onPasswordChanged={onPasswordChanged}/>;
       case 'appearance': return <Appearance user={user} branding={branding}/>;
-      case 'admin': return <AdminSettings user={user} branding={branding} onBrand={(next) => setSession({ branding: next })} notify={notify} refresh={refresh}/>;
+      case 'admin': return <AdminSettings user={user} workspace={workspace} branding={branding} onBrand={(next) => setSession({ branding: next })} notify={notify} refresh={refresh}/>;
       case 'providers': return <Providers {...props}/>;
-      case 'integrations': return <Integrations {...props} notice={route.notice} composioNotice={route.composioNotice}/>;
+      case 'integrations': return <Integrations {...props} notice={route.notice}/>;
       default: return <SettingsHome user={user} workspace={workspace} branding={branding}/>;
     }
   }
@@ -204,7 +204,7 @@ function Workspace({ session, onSession, onSignedOut, onPasswordChanged }) {
         {route.page === 'project' && <Project key={route.id} job={current} loading={!projectsLoaded} loadError={projectsError} workspace={workspace} createProject={createProject} updateProject={updateProject} removeProject={removeProject} notify={notify}/>}
         {route.page === 'settings' && <><SettingsTabs tab={route.tab} user={user}/>{settings()}</>}
         {route.page === 'captions' && <CaptionsPage workspace={workspace} notify={notify}/>}
-        <div hidden={route.page !== 'chat'}><ChatPage workspace={workspace} user={user} active={route.page === 'chat'} showApps={route.showApps} composioNotice={route.page === 'chat' ? route.composioNotice : null} onUseSource={useDiscoverySource}/></div>
+        <div hidden={route.page !== 'chat'}><ChatPage workspace={workspace} user={user} active={route.page === 'chat'} showWorkflows={route.showWorkflows} onUseSource={useDiscoverySource}/></div>
         {route.page === 'setup' && <Setup workspace={workspace} refresh={refresh} notify={notify}/>}
       </main>
     </div>

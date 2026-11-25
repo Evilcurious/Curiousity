@@ -66,16 +66,16 @@ test('cookie auth, signup validation, per-account integrations and admin-approve
 
   const myWorkspace = () => member.request('/workspace').then((res) => data(res));
   const isolated = await myWorkspace();
-  assert.equal(isolated.google.configured, false);
+  assert.equal(isolated.google.configured, true);
+  assert.equal(isolated.google.connected, false);
   assert.deepEqual(isolated.providers.map((p) => p.id), [own.id]);
   assert.deepEqual(isolated.mcps.map((p) => p.id), [myMcp.id]);
-  const ownerGoogle = await data(await member.put('/google/config', { clientId: 'fixture-user-id', clientSecret: 'fixture-private-google-key', redirectUri: `${engine.url}/api/google/callback` }));
-  assert.equal(ownerGoogle.clientSecret, undefined);
-  assert.equal((await myWorkspace()).google.clientId, 'fixture-user-id');
+  assert.equal((await member.put('/google/config', { clientId: 'fixture-user-id', clientSecret: 'fixture-private-google-key', redirectUri: `${engine.url}/api/google/callback` })).status, 403);
+  assert.equal((await myWorkspace()).google.clientId, undefined);
   assert.equal((await data(await admin.request('/workspace'))).google.clientId, 'env-google-id');
-  assert.equal((await data(await other.request('/workspace'))).google.configured, false);
-  const auth = await data(await member.post('/google/connect', { targets: ['drive'] }));
-  const callback = `/google/callback?state=${new URL(auth.url).searchParams.get('state')}&error=access_denied`;
+  assert.equal((await data(await other.request('/workspace'))).google.configured, true);
+  assert.equal((await member.post('/google/connect', { targets: ['drive'] })).status, 400, 'the app callback origin must match');
+  const callback = '/google/callback?state=not-from-this-browser&error=access_denied';
   assert.match(decodeURIComponent((await other.request(callback, { redirect: 'manual' })).headers.get('location')), /not started in this browser/);
 
   await data(await admin.put(`/admin/providers/${adminProfile.id}/share`, { shared: true }));

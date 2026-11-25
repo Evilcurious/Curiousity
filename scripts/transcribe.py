@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from faster_whisper import WhisperModel
@@ -26,6 +27,7 @@ def main():
     files = sorted(args.path.glob("audio-*.mp3")) if args.chunks else [args.path]
     cues, language = [], None
     for index, audio in enumerate(files):
+        print(f"CF_TRANSCRIBE {index} {len(files)}", file=sys.stderr, flush=True)
         offset = index * (args.chunks or 0)
         segments, info = model.transcribe(str(audio), task=task, vad_filter=True, word_timestamps=True, beam_size=3)
         for segment in segments:

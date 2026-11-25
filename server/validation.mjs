@@ -59,12 +59,14 @@ export function jobOptions(body = {}) {
   if (captionLanguage !== 'source' && (typeof captionLanguage !== 'string' || !Object.hasOwn(languages, captionLanguage))) throw new HttpError(400, 'Choose a supported caption language.');
   if (!['source', 'off'].includes(hashtagLanguage) && (typeof hashtagLanguage !== 'string' || !Object.hasOwn(languages, hashtagLanguage))) throw new HttpError(400, 'Choose a supported hashtag language.');
   const captionStyle = captionStyleInput(body.captionStyle);
-  const aiProfile = demo ? 'local' : body.aiProfile ?? 'workspace';
+  if (body.engineMode !== undefined && !['local', 'ai'].includes(body.engineMode)) throw new HttpError(400, 'Choose Local or AI processing.');
+  const engineMode = demo ? 'local' : body.engineMode;
+  const aiProfile = engineMode === 'local' ? 'local' : body.aiProfile ?? 'workspace';
   if (typeof aiProfile !== 'string' || (!['workspace', 'local'].includes(aiProfile) && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(aiProfile))) {
     throw new HttpError(400, 'Select a saved AI profile, Workspace default, or Local analysis.');
   }
   return { demo, ...source, count, mode, liveMinutes, captions: body.captions !== false, tiktok: !demo && body.tiktok === true,
-    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage, captionStyle, aiProfile };
+    platform, aspectRatio: frame.ratio, captionLanguage, hashtagLanguage, captionStyle, aiProfile, ...(engineMode && { engineMode }) };
 }
 
 export function text(value, max, fallback = '') {

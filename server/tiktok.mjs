@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError, text } from './validation.mjs';
@@ -32,7 +32,7 @@ async function tiktokApi(route, { headers = {}, body, token } = {}) {
   return payload.data ?? payload;
 }
 
-export function createTikTok(store, { useEnv = true, background = true, accountLimit = () => 1 } = {}) {
+export function createTikTok(store, { useEnv = true, background = true, accountLimit = () => 1, sharedConfig } = {}) {
   const persistedConfig = useEnv && process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET && process.env.TIKTOK_REDIRECT_URI
   ? { clientKey: process.env.TIKTOK_CLIENT_KEY, clientSecret: process.env.TIKTOK_CLIENT_SECRET, redirectUri: process.env.TIKTOK_REDIRECT_URI }
   : null;
@@ -42,17 +42,27 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
   delete state.account;
   const pending = new Map(), refreshing = new Map();
   let processing = false, revision = 0;
-  const readConfig = () => persistedConfig || (state.config && { ...state.config, clientSecret: store.unseal(state.config.clientSecret) });
-  const enabled = () => Boolean(persistedConfig || state.config);
-  const activeAccounts = () => { const limit = accountLimit(); return limit === null ? state.accounts : state.accounts.slice(0, limit); };
+  const selectedConfig = () => (sharedConfig && state.config) || persistedConfig || state.config || sharedConfig?.();
+  const readConfig = () => {
+    const value = selectedConfig();
+    return value && (value === persistedConfig ? value : { ...value, clientSecret: store.unseal(value.clientSecret) });
+  };
+  const appKey = () => selectedConfig()?.clientKey;
+  const appId = () => appKey() ? createHash('sha256').update(appKey()).digest('hex') : null;
+  const belongs = (row) => Boolean(appKey() && (row.appId ? row.appId === appId() : !sharedConfig || state.config));
+  const enabled = () => Boolean(selectedConfig());
+  const activeAccounts = () => {
+    const limit = accountLimit(), accounts = state.accounts.filter(belongs);
+    return limit === null ? accounts : accounts.slice(0, limit);
+  };
   const stamp = () => JSON.stringify(readConfig());
 
   function describe() {
-    const config = persistedConfig || state.config;
-    const limit = accountLimit();
-    const accounts = state.accounts.map(({ id, name }, index) => ({ id, name, available: Boolean(config) && (limit === null || index < limit) }));
+    const config = selectedConfig();
+    const limit = accountLimit(), availableAccounts = new Set(activeAccounts());
+    const accounts = state.accounts.map((row) => ({ id: row.id, name: row.name, available: availableAccounts.has(row) }));
     const account = accounts.find(({ available }) => available) || null;
-    return { configured: Boolean(config), managedByEnv: Boolean(persistedConfig), clientKey: config?.clientKey || '', redirectUri: config?.redirectUri || '', connected: Boolean(account), account, accounts, accountLimit: limit };
+    return { configured: Boolean(config), managedByEnv: Boolean(config && config === persistedConfig), clientKey: config?.clientKey || '', redirectUri: config?.redirectUri || '', connected: Boolean(account), account, accounts, accountLimit: limit };
   }
   function configure(body) {
     if (persistedConfig) throw new HttpError(409, 'This integration is managed by server environment variables.');
@@ -67,21 +77,22 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
     store.save();
     return describe();
   }
-  function connect(origin) {
+  function connect(origin, session) {
     const config = readConfig();
     if (!config) throw new HttpError(409, 'Save TikTok app credentials first.');
     if (origin && new URL(config.redirectUri).origin !== origin) throw new HttpError(400, 'Open Curiousity at the registered HTTPS redirect origin to connect TikTok.');
     for (const [id, entry] of pending) if (entry.expiresAt < Date.now()) pending.delete(id);
     if (pending.size >= 30) throw new HttpError(429, 'Too many pending connections. Try again in a few minutes.');
     const csrfState = randomBytes(24).toString('base64url');
-    pending.set(csrfState, { expiresAt: Date.now() + 10 * 60_000, config: stamp(), revision });
+    pending.set(csrfState, { expiresAt: Date.now() + 10 * 60_000, config: stamp(), revision, session });
     const url = new URL(authorize);
     url.search = new URLSearchParams({ client_key: config.clientKey, scope: scopes.join(','), response_type: 'code', redirect_uri: config.redirectUri, state: csrfState }).toString();
     return url.toString();
   }
-  async function callback(query, authorized = () => true) {
+  async function callback(query, authorized = () => true, session) {
     const id = text(query.state, 100);
     const entry = pending.get(id);
+    if (entry && entry.session !== session) throw new HttpError(401, 'Return to the same Curiousity session to finish the TikTok connection.');
     pending.delete(id);
     if (!entry || entry.expiresAt < Date.now() || (entry.config !== stamp() || entry.revision !== revision)) throw new HttpError(400, 'This TikTok connection link expired. Start again from Integrations.');
     if (!query.code || query.error) throw new HttpError(400, 'TikTok authorization was cancelled or declined.');
@@ -94,8 +105,8 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
     if (!authorized()) throw new HttpError(401, 'Your session changed. Sign in and reconnect.');
     const index = state.accounts.findIndex((row) => row.id === tokens.open_id);
     const limit = accountLimit();
-    if (index === -1 && limit !== null && state.accounts.length >= limit) throw new HttpError(429, 'Your plan’s TikTok account limit is full. Disconnect an account or change your plan first.');
-    const account = { id: tokens.open_id, name: text(profile.user?.display_name, 80, 'TikTok creator'), access: store.seal(tokens.access_token), refresh: store.seal(tokens.refresh_token), expiry: Date.now() + Number(tokens.expires_in || 0) * 1000 };
+    if ((index === -1 || !belongs(state.accounts[index])) && limit !== null && state.accounts.filter(belongs).length >= limit) throw new HttpError(429, 'Your plan’s TikTok account limit is full. Disconnect an account or change your plan first.');
+    const account = { id: tokens.open_id, appId: appId(), name: text(profile.user?.display_name, 80, 'TikTok creator'), access: store.seal(tokens.access_token), refresh: store.seal(tokens.refresh_token), expiry: Date.now() + Number(tokens.expires_in || 0) * 1000 };
     if (index === -1) state.accounts.push(account);
     else state.accounts[index] = account;
     store.save();
@@ -111,14 +122,15 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
     revision++;
     store.save();
   }
-  async function tokenFor(accountId) {
+  async function tokenFor(accountId, approvedAppId) {
     const account = activeAccounts().find((row) => row.id === accountId);
     const config = readConfig();
-    if (!config || !account) throw new HttpError(409, 'Connect the same TikTok account within your plan limit to finish this upload.');
+    if (!config || !account || (approvedAppId && approvedAppId !== appId())) throw new HttpError(409, 'Connect the same TikTok account within your plan limit to finish this upload.');
     if (account.expiry > Date.now() + 120_000) return store.unseal(account.access);
     if (!refreshing.has(account)) {
+      const revisionAtRefresh = stamp();
       const operation = tiktokApi('/oauth/token/', { body: new URLSearchParams({ client_key: config.clientKey, client_secret: config.clientSecret, grant_type: 'refresh_token', refresh_token: store.unseal(account.refresh) }) }).then((tokens) => {
-        if (!tokens.access_token || (tokens.open_id && tokens.open_id !== account.id) || !activeAccounts().includes(account)) throw new HttpError(409, 'Reconnect TikTok to continue.');
+        if (!tokens.access_token || (tokens.open_id && tokens.open_id !== account.id) || stamp() !== revisionAtRefresh || !activeAccounts().includes(account)) throw new HttpError(409, 'Reconnect TikTok to continue.');
         account.access = store.seal(tokens.access_token);
         if (tokens.refresh_token) account.refresh = store.seal(tokens.refresh_token);
         account.expiry = Date.now() + Number(tokens.expires_in || 0) * 1000;
@@ -137,7 +149,7 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
   async function upload(job, clip) {
     const item = clip.tiktok;
     update(clip, { state: 'uploading', reason: '' });
-    const token = await tokenFor(item.accountId);
+    const token = await tokenFor(item.accountId, item.appId);
     const path = join(jobDir(job.id), clip.id, 'video.mp4');
     const { size } = await stat(path);
     if (size < 1 || size > 1024 * MiB) throw new HttpError(400, 'This MP4 is outside the upload size limit.');
@@ -166,7 +178,7 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
   async function check(clip) {
     const item = clip.tiktok;
     try {
-      const token = await tokenFor(item.accountId);
+      const token = await tokenFor(item.accountId, item.appId);
       const payload = await tiktokApi('/post/publish/status/fetch/', { token, body: { publish_id: item.publishId } });
       if (['SEND_TO_USER_INBOX', 'PUBLISH_COMPLETE'].includes(payload.status)) return update(clip, { state: 'sent', reason: '', nextCheck: null });
       if (payload.status === 'FAILED') {
@@ -213,7 +225,7 @@ export function createTikTok(store, { useEnv = true, background = true, accountL
       const clips = job.clips.filter((clip) => ids.has(clip.id));
       if (consent !== true || !ids.size || ids.size !== clips.length) throw new HttpError(400, 'Select and review the clips, then confirm upload consent.');
       if (clips.some((clip) => clip.tiktok && !['failed'].includes(clip.tiktok.state))) throw new HttpError(409, 'Some clips are already queued, uploaded, or not yet confirmed.');
-      for (const clip of clips) clip.tiktok = { state: 'queued', accountId: account.id, updatedAt: new Date().toISOString() };
+      for (const clip of clips) clip.tiktok = { state: 'queued', accountId: account.id, appId: appId(), updatedAt: new Date().toISOString() };
       store.save();
       queueMicrotask(() => { tick().catch(() => {}); });
     },

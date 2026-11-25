@@ -2,7 +2,7 @@ import { withMcp } from './mcp.mjs';
 import { boundedText, guardedFetch } from './outbound.mjs';
 import { HttpError, youtubeSource } from './validation.mjs';
 import { checkDate, checkSnapshot } from './discovery-evidence.mjs';
-import { defaultDiscoveryDays, discoveryLimits, discoveryNames, discoveryVerificationVersion, leadSources, reachSources } from '../shared/discovery.mjs';
+import { defaultDiscoveryDays, discoveryLimits, discoveryNames, discoveryVerificationVersion, reachSources } from '../shared/discovery.mjs';
 
 const exaKey = process.env.EXA_API_KEY?.trim();
 const youtubeKey = process.env.YOUTUBE_DATA_API_KEY?.trim();
@@ -17,26 +17,18 @@ const targets = {
   youtube: { domains: ['youtube.com', 'youtu.be'], prompt: 'Direct YouTube video, Short or livestream replay pages' },
   tiktok: { domains: ['tiktok.com'], prompt: 'Direct TikTok video posts, not hashtag or account pages' },
   instagram: { domains: ['instagram.com'], prompt: 'Direct Instagram Reels, not profiles or photo posts' },
-  jobs: { domains: ['linkedin.com'], prompt: 'Current public LinkedIn job listings (linkedin.com/jobs/view/), not job search pages or articles' },
-  companies: { domains: ['linkedin.com'], prompt: 'Public LinkedIn company pages (linkedin.com/company/) for businesses, not people or posts' },
-  maps: { domains: ['google.com'], prompt: 'Indexed Google Maps business place links (google.com/maps/place/), not generic searches' },
 };
 
-export function discoveryInput(kind, body) {
+export function discoveryInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Enter a search query.');
-  const { query, location = '', source = 'all', mode = 'jobs', days = defaultDiscoveryDays } = body;
-  if (typeof query !== 'string' || query.length > discoveryLimits.query || !clean(query, discoveryLimits.query)) throw new HttpError(400, `Enter a topic, hashtag or job title up to ${discoveryLimits.query} characters.`);
+  const { query, source = 'all', days = defaultDiscoveryDays } = body;
+  if (typeof query !== 'string' || query.length > discoveryLimits.query || !clean(query, discoveryLimits.query)) throw new HttpError(400, `Enter a topic or hashtag up to ${discoveryLimits.query} characters.`);
   if (!Number.isInteger(days) || days < 1 || days > discoveryLimits.days) throw new HttpError(400, `Choose a lookback of 1 to ${discoveryLimits.days} whole days.`);
-  if (kind === 'reach') {
-    if (source !== 'all' && !reachSources.includes(source)) throw new HttpError(400, 'Choose a supported platform.');
-    return { query: clean(query, discoveryLimits.query), days, sources: source === 'all' ? reachSources : [source] };
-  }
-  if (!['jobs', 'leads'].includes(mode) || (mode === 'jobs' ? !['all', 'jobs'].includes(source) : source !== 'all' && !leadSources.includes(source))) throw new HttpError(400, 'Choose LinkedIn Jobs or a supported business source.');
-  if (typeof location !== 'string' || location.length > discoveryLimits.location) throw new HttpError(400, `Enter a location up to ${discoveryLimits.location} characters.`);
-  return { query: clean(query, discoveryLimits.query), location: clean(location, discoveryLimits.location), mode, days, sources: mode === 'jobs' ? ['jobs'] : source === 'all' ? leadSources : [source] };
+  if (source !== 'all' && !reachSources.includes(source)) throw new HttpError(400, 'Choose a supported platform.');
+  return { query: clean(query, discoveryLimits.query), days, sources: source === 'all' ? reachSources : [source] };
 }
 
-// Only direct pages of the selected type make it into results or Excel. We
+// Only direct video pages of the selected type make it into results. We
 // do not fetch result URLs ourselves, embed them, or resolve short links.
 function listing(source, raw) {
   if (typeof raw !== 'string' || raw.length > 2000) return null;
@@ -55,18 +47,6 @@ function listing(source, raw) {
     case 'instagram':
       found = /^(?:www\.)?instagram\.com$/.test(host) && path.match(/^\/(reel|tv)\/([\w-]{3,32})\/?$/);
       return found ? { id: found[2], url: `https://www.instagram.com/${found[1]}/${found[2]}/` } : null;
-    case 'jobs':
-      found = /^(?:www\.|[a-z]{2}\.)?linkedin\.com$/.test(host) && path.match(/^\/jobs\/view\/(?:[\w%-]+-)?(\d{4,20})\/?$/i);
-      return found ? { id: found[1], url: `https://www.linkedin.com/jobs/view/${found[1]}/` } : null;
-    case 'companies':
-      found = /^(?:www\.|[a-z]{2}\.)?linkedin\.com$/.test(host) && path.match(/^\/company\/([\w%-]{1,130})(?:\/about)?\/?$/i);
-      return found ? { id: found[1].toLowerCase(), url: `https://www.linkedin.com/company/${found[1]}/` } : null;
-    case 'maps': {
-      if (!/^(?:www\.|maps\.)?google\.com$/.test(host)) return null;
-      if (/^\/maps\/place\/[^/]+/.test(path)) return { id: path.replace(/\/$/, ''), url: `https://www.google.com${path}` };
-      const cid = url.searchParams.get('cid');
-      return /^\/maps\/?$/.test(path) && /^\d{4,24}$/.test(cid || '') ? { id: cid, url: `https://www.google.com/maps?cid=${cid}` } : null;
-    }
     default: return null;
   }
 }
@@ -93,12 +73,11 @@ function indexRows(source, payload, window) {
     if (ignoredFreshness || stale.has(link.id) || stale.has(item.id) || stale.has(item.url)) { missed(excluded, 'unconfirmed'); continue; }
     // Snippets and index metadata alone are not proof of availability.
     // The search requested live content for this exact result page.
-    const proof = checkSnapshot(source, item.text, window);
+    const proof = checkSnapshot(source, item.text);
     if (proof.exclude) { missed(excluded, proof.exclude); continue; }
-    // Do not copy Google Maps content into Excel or send it to an AI model.
-    records.push({ source, url: link.url, title: source === 'maps' ? 'Indexed Maps listing' : clean(item.title, 160) || `${discoveryNames[source]} listing`,
-      published, author: source === 'maps' ? '' : clean(item.author, 90), availability: proof.availability,
-      excerpt: source === 'maps' ? '' : clean(proof.evidence, 260), clippable: source === 'youtube' });
+    records.push({ source, url: link.url, title: clean(item.title, 160) || `${discoveryNames[source]} video`,
+      published, author: clean(item.author, 90), availability: proof.availability,
+      excerpt: clean(proof.evidence, 260), clippable: source === 'youtube' });
     if (records.length === maxPerSource) break;
   }
   return { records, excluded };
@@ -145,7 +124,7 @@ async function searchIndex(sources, input, window, signal) {
   async function search(getResults) {
     return Promise.all(sources.map((source) => outcome(source, method, 'Index relevance', async () => {
       const { domains, prompt } = targets[source];
-      const query = `${prompt} matching: ${input.query}${input.location ? `; location: ${input.location}` : ''}; dated on or after ${after}`;
+      const query = `${prompt} matching: ${input.query}; dated on or after ${after}`;
       const params = { query, numResults: 12, includeDomains: domains, startPublishedDate: after, type: 'auto' };
       return indexRows(source, await getResults(params), window);
     }, signal)));

@@ -5,10 +5,12 @@ import { Banner, Button, JobBadge, PanelHeading, SHORT_DATE, Switch, TextLink, T
 import { exportFrame, frameFor, languages, platforms, ratioChoices, romanUrdu } from '../shared/exports.mjs';
 import { captionScriptFont, captionStyleLabel, defaultCaptionStyle } from '../shared/captions.mjs';
 import CaptionAppearance from './caption-appearance.jsx';
+import MediaModes from './media-modes.jsx';
+import './media-modes.css';
 
 const demoTitle = 'The anatomy of a great hook';
 const presets = [1, 3, 4, 5, 10];
-const initialFields = { url: '', count: 3, custom: '6', mode: 'auto', liveMinutes: 2, customLiveMinutes: '45', captions: true, tiktok: false, platform: 'universal', ratioMode: 'preset', customRatio: '3:2', captionLanguage: 'source', hashtagLanguage: 'source', captionStyle: defaultCaptionStyle, aiProfile: 'workspace' };
+const initialFields = { url: '', count: 3, custom: '6', mode: 'auto', liveMinutes: 2, customLiveMinutes: '45', captions: true, tiktok: false, platform: 'universal', ratioMode: 'preset', customRatio: '3:2', captionLanguage: 'source', hashtagLanguage: 'source', captionStyle: defaultCaptionStyle, engineMode: 'local', aiProfile: 'workspace' };
 
 export function ProjectRow({ project }) {
   const first = project.clips[0];
@@ -54,8 +56,8 @@ export default function Studio({ user, workspace, projects, projectsError, creat
   const shared = workspace?.sharedProviders || [];
   const choices = [...profiles, ...shared];
   const active = choices.find((profile) => profile.id === workspace?.activeProviderId);
-  const selected = choices.find((profile) => profile.id === fields.aiProfile);
-  const aiProfile = fields.aiProfile === 'workspace' || selected ? fields.aiProfile : 'local';
+  const selected = choices.find((profile) => profile.id === fields.aiProfile) || active || choices[0];
+  const mode = fields.engineMode || 'local';
   const captionStyle = captionScriptFont(fields.captionLanguage) ? { ...fields.captionStyle, font: 'auto' } : fields.captionStyle;
   const profileNameCount = new Map();
   for (const { name } of choices) profileNameCount.set(name, (profileNameCount.get(name) || 0) + 1);
@@ -74,7 +76,9 @@ export default function Studio({ user, workspace, projects, projectsError, creat
   const change = (key, value) => { setError(''); setFields((previous) => ({ ...previous, [key]: value })); };
   async function submit(demo = false) {
     setError('');
+    if (!demo && workspace?.mediaModes !== true) { setError('Connect to the updated Curiousity engine before starting a project.'); return; }
     if (!demo && !fields.url.trim()) { setError('Paste a YouTube video or livestream link to get started.'); urlInput.current?.focus(); return; }
+    if (!demo && mode === 'ai' && !selected) { setError('Set up or select a vision-capable AI profile, or use Local mode.'); return; }
     const resolved = count === 'auto' ? 'auto' : Number(count === 'custom' ? fields.custom : count);
     if (resolved !== 'auto' && (!Number.isInteger(resolved) || resolved < 1 || resolved > maxClips)) { setError(`Enter a whole number from 1 to ${maxClips}.`); customInput.current?.focus(); return; }
     if (!frame) { setError('Enter a custom ratio like 3:2, between 1:4 and 4:1 (whole numbers from 1 to 100).'); ratioInput.current?.focus(); return; }
@@ -83,7 +87,7 @@ export default function Studio({ user, workspace, projects, projectsError, creat
     setBusy(demo ? 'demo' : 'submit');
     try {
       const { custom, ratioMode, customRatio, customLiveMinutes, ...options } = fields;
-      await createProject({ ...options, url: fields.url.trim(), demo, liveMinutes, count: resolved, aiProfile: demo ? 'local' : aiProfile, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
+      await createProject({ ...options, url: fields.url.trim(), demo, liveMinutes, count: resolved, engineMode: demo ? 'local' : mode, aiProfile: demo || mode === 'local' ? 'local' : selected.id, aspectRatio: frame.ratio, tiktok: !demo && tiktokConnected && fields.tiktok });
     } catch (err) { setError(err.message); notify(err.message, 'error'); }
     finally { setBusy(''); }
   }
@@ -101,7 +105,7 @@ export default function Studio({ user, workspace, projects, projectsError, creat
       <div className="hero-content">
         <div className="hero-label"><span/><span>AI CLIPPING STUDIO</span></div>
         <h1 id="hero-title">Find the moment.<br/><em>Make it a clip.</em></h1>
-        <p>Turn YouTube videos and livestreams into short, captioned clips with AI-assisted highlight detection.</p>
+        <p>Turn YouTube videos and livestreams into short, captioned clips. Choose Local highlights or AI video analysis.</p>
       </div>
       <div className="hero-signal" aria-hidden="true"><AudioLines size={14} strokeWidth={1.6}/><span>SIGNAL VIEW</span><span className="hero-signal-dot"/></div>
       <span className="hero-cross" aria-hidden="true">+</span>
@@ -116,6 +120,10 @@ export default function Studio({ user, workspace, projects, projectsError, creat
             <svg className="youtube-mark" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.6" y="5.5" width="18.8" height="13" rx="3.5"/><path d="m10 9 5 3-5 3z"/></svg>
             <input ref={urlInput} type="url" id="source-url" placeholder="https://www.youtube.com/watch?v=…" value={fields.url} maxLength={1000} autoComplete="url" spellCheck="false" onChange={(event) => { change('url', event.target.value); setError(''); }}/>
             <button className="paste-button" type="button" onClick={pasteUrl}><Clipboard size={14}/><span>Paste</span></button>
+          </div>
+          <div className="studio-media-mode"><span className="field-label">How to find highlights</span>
+            <MediaModes label="Clip processing mode" value={mode} onChange={(value) => change('engineMode', value)} disabled={Boolean(busy)} localDetail="Audio, replay & transcript" aiDetail="Model sees the footage"/>
+            {mode === 'ai' && <p className="count-note">{selected?.type === 'gemini' ? 'Sends a small video preview (with audio) for sources up to 90 seconds, or sampled frames for longer sources, plus available transcripts and signals.' : 'Sends timestamped frames, available transcripts, and signals to your selected model. Use a model that accepts multiple images.'}</p>}
           </div>
           <div className="clip-count-head"><span className="field-label" id="count-label">Number of clips</span></div>
           <div className="count-group" role="group" aria-labelledby="count-label">
@@ -154,7 +162,7 @@ export default function Studio({ user, workspace, projects, projectsError, creat
           {fields.captions && <Setting icon={Type} title="Caption style" detail={captionStyleLabel(captionStyle)}><Button aria-label="Customize caption style" className="setting-button" onClick={() => setStyleOpen(true)}>Customize</Button></Setting>}
           <Setting icon={Hash} title="Hashtag language" detail="Suggestions, separate from captions"><LanguageSelect kind="Hashtag" value={fields.hashtagLanguage} onChange={(value) => change('hashtagLanguage', value)}/></Setting>
           {tiktokConnected && <Setting icon={TikTokIcon} title="Send to TikTok" detail="Preselect clips for review with your existing TikTok connection"><Switch label="Send to TikTok" enabled={fields.tiktok} onChange={(value) => change('tiktok', value)}/></Setting>}
-          <Setting icon={Cpu} title="AI engine" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? profileLabel(selected) : aiProfile === 'workspace' && active ? `Workspace default: ${profileLabel(active)}` : 'Local analysis'} value={aiProfile} onChange={(event) => change('aiProfile', event.target.value)}><option value="workspace">Default: {active ? profileLabel(active) : 'Local'}</option><option value="local">Local analysis</option>{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Shared AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Shared</option>)}</optgroup>}</OutputSelect></Setting>
+          {mode === 'ai' && <Setting icon={Cpu} title="AI video model" detail={<a className="setting-link" href="#/settings/providers">Manage AI profiles</a>}><OutputSelect compact className="project-ai-select" aria-label="Project AI profile" title={selected ? `${profileLabel(selected)} · ${selected.model}` : 'A vision-capable model is needed'} value={selected?.id || ''} onChange={(event) => change('aiProfile', event.target.value)}>{!selected && <option value="">No model set up</option>}{profiles.length > 0 && <optgroup label="Your profiles">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}</optgroup>}{shared.length > 0 && <optgroup label="Shared AI">{shared.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)} · Shared</option>)}</optgroup>}</OutputSelect></Setting>}
         </div>
         {user?.role === 'member' && user.plan?.id === 'free' && <a className="studio-premium" href="#/settings/account?plans=1"><Crown size={16}/><span>Activate Premium</span><ChevronRight size={14}/></a>}
       </section>

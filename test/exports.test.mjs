@@ -36,29 +36,61 @@ test('caption track selection and localized hashtags do not depend on one anothe
   assert.deepEqual(suggestHashtags({ choice: 'off', transcriptLanguage: 'es' }), { hashtags: [], hashtagLanguage: null });
 });
 
-test('provider translation preserves cue timings and labels original on missing translations', async (t) => {
+test('provider translation repairs missing cues, preserves times, and keeps original if the repair fails', async (t) => {
   const provider = { type: 'custom', name: 'Mock translator', baseUrl: 'https://models.example', model: 'mock' };
   const store = { unseal: () => '' };
-  const french = ['Voici le début.', 'Attendez la révélation.'];
-  let complete = true;
+  const french = { '0:0': 'Voici le début.', '0:1': 'Attendez la révélation.' };
+  const calls = [];
+  let repairable = true;
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://models.example/chat/completions');
     const payload = JSON.parse(options.body);
-    assert.match(payload.messages[0].content, /French/);
+    assert.match(payload.messages[0].content, /French.*"translations" array/);
     const cues = JSON.parse(payload.messages[1].content);
-    assert.deepEqual(cues.map(({ text }) => text), original[0].map(({ text }) => text));
-    const contents = cues.map(({ id }, i) => ({ id, text: french[i] }));
-    return Response.json({ choices: [{ message: { content: JSON.stringify(complete ? contents.reverse() : contents.slice(0, 1)) } }] });
+    calls.push(cues.map(({ id }) => id));
+    for (const { id, text } of cues) assert.equal(text, original[0][Number(id.split(':')[1])].text);
+    const contents = cues.filter(({ id }) => id === '0:0' || (repairable && cues.length === 1)).map(({ id }) => ({ id, translated_text: french[id], start: 90, end: 100 }));
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: [...contents, { id: 'not-a-cue', text: 'Ignore this.' }] }) } }] });
   });
   const options = { original, sourceLanguage: 'en', target: 'fr', provider, store, tryTrack: async () => null, signal };
   const translation = await localizeClips(options);
   assert.equal(translation.language, 'fr');
-  assert.deepEqual(translation.tracks[0], original[0].map((cue, i) => ({ ...cue, text: french[i] })));
-  complete = false;
+  assert.deepEqual(translation.tracks[0], original[0].map((cue, i) => ({ ...cue, text: french[`0:${i}`] })));
+  assert.deepEqual(calls, [['0:0', '0:1'], ['0:1']], 'retry only the missing cue');
+  repairable = false;
   const fallback = await localizeClips(options);
   assert.equal(fallback.language, 'en');
   assert.deepEqual(fallback.tracks, original);
-  assert.match(fallback.warning, /Original captions were used/);
+  assert.match(fallback.warning, /Original captions were used.*did not translate every caption cue/);
+  assert.deepEqual(calls.slice(2), [['0:0', '0:1'], ['0:1']], 'the repair is bounded');
+});
+
+test('English translation uses the local speech fallback without relabeling copied foreign captions', async (t) => {
+  const foreign = [[{ start: .2, end: 3.4, text: 'Así se prepara un buen vídeo.' }]];
+  const english = [[{ start: .21, end: 3.3, text: 'This is how to make a good video.' }]];
+  const provider = { type: 'custom', name: 'Mock model', baseUrl: 'https://models.example', model: 'mock' };
+  let status = 200;
+  const calls = t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    if (status !== 200) return Response.json({ error: 'private provider error contents' }, { status });
+    const cues = JSON.parse(JSON.parse(body).messages.at(-1).content);
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: cues }) } }] });
+  });
+  const options = { original: foreign, sourceLanguage: 'es', target: 'en', provider, store: { unseal: () => '' }, tryTrack: async () => null, signal };
+  const copied = await localizeClips(options);
+  assert.deepEqual(copied.tracks, foreign);
+  assert.equal(copied.language, 'es');
+  assert.match(copied.warning, /copied the source captions.*Local Whisper/);
+  status = 429;
+  const translated = await localizeClips({ ...options, tryEnglish: async () => ({ tracks: english, label: 'Local Whisper translation' }) });
+  assert.deepEqual(translated.tracks, english);
+  assert.equal(translated.language, 'en');
+  assert.equal(translated.label, 'Local Whisper translation');
+  assert.equal(translated.warning, undefined);
+  assert.equal(calls.mock.callCount(), 2, 'provider rate limits are not retried');
+  const retained = await localizeClips(options);
+  assert.equal(retained.language, 'es');
+  assert.match(retained.warning, /HTTP 429.*quota/);
+  assert.doesNotMatch(retained.warning, /private provider error/);
 });
 
 test('Roman Urdu is a separate script choice and offline romanization preserves cue times', async () => {

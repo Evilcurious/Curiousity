@@ -6,9 +6,6 @@ const trace = process.env.FIXTURE_DISCOVERY_TRACE;
 const now = (ms = 3_600_000) => new Date(Date.now() - ms).toISOString();
 const record = (entry) => appendFile(trace, `${JSON.stringify(entry)}\n`);
 
-const openJob = '[Apply](https://fixture.example.test/job)\nA video editing role with <public> details & location in Lahore.';
-const cachedJob = 'https://www.linkedin.com/jobs/view/7365432107/';
-const job = (id, title, text, publishedDate = now()) => ({ title, url: `https://www.linkedin.com/jobs/view/736543210${id}/`, text, publishedDate });
 function searchPayload(params) {
   const domain = params.includeDomains[0];
   const results = (domain === 'youtube.com' ? [
@@ -26,33 +23,10 @@ function searchPayload(params) {
     { title: 'Fixture Reel', url: 'https://www.instagram.com/reel/TestReel1/?igsh=track', publishedDate: now(), text: 'View all 14 comments' },
     { title: 'Unavailable Reel', url: 'https://www.instagram.com/reel/TestReel3/', publishedDate: now(), text: 'This reel is unavailable. 15 likes' },
     { title: 'Photo', url: 'https://www.instagram.com/p/TestReel2' },
-  ]) : domain === 'linkedin.com' ? (params.query.includes('linkedin.com/jobs/view/') ? [
-    { title: '=1+1 & "Fixture video editor"', url: 'https://pk.linkedin.com/jobs/view/editor-at-fixture-7365432101?trk=tracking', publishedDate: now(), text: openJob },
-    { title: 'Duplicate role', url: 'https://www.linkedin.com/jobs/view/7365432101/' },
-    { title: 'Not a job', url: 'https://www.linkedin.com/jobs/search/?keywords=editor' },
-    { title: 'Not a hyperlink', url: 'javascript:void(0)' },
-    job(2, 'Expired synthetic role', `${openJob}\nNo longer accepting applications`),
-    job(3, 'Undated synthetic role', openJob, null),
-    job(4, 'Deadline synthetic role', `${openJob}\nClosing date: 2009-01-01`),
-    job(5, 'Unknown synthetic role', 'A page with no application option.\n\n## Similar jobs\nApply\nVideo editing job.'),
-    job(6, 'Stale synthetic role', openJob, '2008-01-01'),
-    job(7, 'Cached synthetic role', openJob),
-    ...(params.query.includes('range fixture') ? [job(8, 'Earlier fixture role', openJob, now(25 * 3_600_000))] : []),
-  ] : [
-    { title: 'Fixture Studio & Partners', url: 'https://www.linkedin.com/company/fixture-studio/about/?trk=tracking', publishedDate: now(), text: 'Public video editing business profile.\nWebsite\n[Fixture Studio](https://fixture.example.test)\n' },
-    { title: 'Closed company', url: 'https://www.linkedin.com/company/fixture-closed/', publishedDate: now(), text: 'Business has closed\n[Visit website](https://fixture.example.test)' },
-    { title: 'Undated company', url: 'https://www.linkedin.com/company/fixture-undated/', text: '[Visit website](https://fixture.example.test)' },
-    { title: 'Not a company', url: 'https://www.linkedin.com/in/fixture-person' },
-  ]) : domain === 'google.com' ? [
-    { title: 'Listing name not copied to export', url: 'https://www.google.com/maps/place/Fixture+Studio/@31.5,74.3,18z/data=!4m5?entry=ttu', publishedDate: now(), text: 'A business address not copied to the workbook.\nOpen ⋅ Closes 5 PM' },
-    { title: 'Closed place', url: 'https://www.google.com/maps/place/Closed+Fixture/', publishedDate: now(), text: 'Permanently closed\nOpen 24 hours' },
-    { title: 'Undated place', url: 'https://www.google.com/maps/place/Undated+Fixture/', text: 'Open 24 hours' },
-    { title: 'Wrong result type', url: 'https://www.google.com/maps/search/?api=1&query=studio' },
-    { title: 'Redirect', url: 'https://www.google.com/url?q=https://disallowed.example/' },
-  ] : []);
+  ]) : []);
   return {
     results,
-    statuses: domain === 'linkedin.com' ? [{ id: cachedJob, status: 'success', source: 'cached' }] : [],
+    statuses: params.query.includes('cached freshness') ? [{ id: 'https://youtu.be/TrendVideo1', status: 'success', source: 'cached' }] : [],
     ...(params.query.includes('ignored freshness') ? { warnings: [{ code: 'IGNORED_FIELD', path: '/contents/maxAgeHours', message: 'Fixture: freshness not honored' }] } : {}),
   };
 }
@@ -81,7 +55,7 @@ if (trace) globalThis.fetch = async (input, options = {}) => {
       return reply({ isError: true, content: [{ type: 'text', text: '429 rate limited (provider internals hidden)' }] });
     }
     const content = searchPayload(args);
-    if (args.includeDomains[0] === 'linkedin.com') {
+    if (args.includeDomains[0] === 'youtube.com' && args.query.includes('range fixture')) {
       const envelope = JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { content: [], structuredContent: content } });
       return new Response(`event: message\ndata: ${envelope}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
     }
@@ -94,7 +68,7 @@ if (trace) globalThis.fetch = async (input, options = {}) => {
   }
   if (url.hostname === 'www.googleapis.com' && url.pathname.startsWith('/youtube/v3/')) {
     await record({ method: 'youtube-api', path: url.pathname, params: Object.fromEntries(url.searchParams), keyed: options.headers['X-Goog-Api-Key'] === 'fixture-youtube-key' });
-    if (url.searchParams.get('q') === 'test fallback') return Response.json({ error: 'provider internals hidden' }, { status: 429 });
+    if (['test fallback', 'ignored freshness fixture', 'cached freshness fixture'].includes(url.searchParams.get('q'))) return Response.json({ error: 'provider internals hidden' }, { status: 429 });
     if (url.pathname.endsWith('/search')) return Response.json({ items: ['TrendVideo1', 'TrendVideo2', 'TrendVideo3', 'TrendVideo4', 'TrendVideo5', 'TrendVideo1'].map((videoId) => ({ id: { videoId } })) });
     const video = (id, title, views, liveBroadcastContent = 'none', privacyStatus = 'public') => ({ id, snippet: { title, channelTitle: 'Fixture YouTube', publishedAt: now(), liveBroadcastContent }, statistics: { viewCount: views }, status: { privacyStatus } });
     return Response.json({ items: [video('TrendVideo1', 'Fixture on demand', '100'), video('TrendVideo2', 'Fixture live broadcast', '20000', 'live'), video('TrendVideo3', 'Private fixture', '999999', 'none', 'private'), video('TrendVideo4', 'Upcoming fixture', '158210', 'upcoming'), { ...video('TrendVideo5', 'Out-of-range fixture', '999999'), snippet: { publishedAt: '2007-01-01T00:00:00Z' } }] });

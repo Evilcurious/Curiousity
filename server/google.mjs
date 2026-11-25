@@ -115,20 +115,26 @@ async function transferFile({ target, path, token, metadata }) {
   } finally { await file.close(); }
 }
 
-export function createGoogle(store, { useEnv = true, background = true } = {}) {
+export function createGoogle(store, { useEnv = true, background = true, sharedConfig } = {}) {
   const state = store.state.google ||= {};
   const envConfig = useEnv && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI
     ? { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET, redirectUri: process.env.GOOGLE_REDIRECT_URI } : null;
-  const config = () => envConfig || (state.config && { ...state.config, clientSecret: store.unseal(state.config.clientSecret) });
+  // Old personal app registrations remain usable. New members use the host's
+  // single OAuth app, but their access and refresh tokens stay account-scoped.
+  const selectedConfig = () => (sharedConfig && state.config) || envConfig || state.config || sharedConfig?.();
+  const config = () => {
+    const value = selectedConfig();
+    return value && (value === envConfig ? value : { ...value, clientSecret: store.unseal(value.clientSecret) });
+  };
   const fingerprint = () => createHash('sha256').update(JSON.stringify(config() || null)).digest('hex');
   const currentAccount = () => state.account?.configId === fingerprint() ? state.account : null;
   const pending = new Map();
   let revision = 0, working = false;
 
   function describe() {
-    const configured = envConfig || state.config;
+    const configured = selectedConfig();
     const account = currentAccount();
-    return { configured: Boolean(configured), managedByEnv: Boolean(envConfig), hasSavedAccount: Boolean(state.account), clientId: configured?.clientId || '', redirectUri: configured?.redirectUri || '', connected: Boolean(account),
+    return { configured: Boolean(configured), managedByEnv: Boolean(configured && configured === envConfig), hasSavedAccount: Boolean(state.account), clientId: configured?.clientId || '', redirectUri: configured?.redirectUri || '', connected: Boolean(account),
       account: account ? { id: account.id, name: account.name } : null, grants: Object.fromEntries(Object.keys(googleScopes).map((target) => [target, Boolean(account?.targets.includes(target))])) };
   }
   function configure(body) {
@@ -142,7 +148,7 @@ export function createGoogle(store, { useEnv = true, background = true } = {}) {
     store.save();
     return describe();
   }
-  function connect(targets, origin) {
+  function connect(targets, origin, session) {
     const creds = config();
     if (!creds) throw new HttpError(409, 'Save your Google OAuth app settings first.');
     const selected = [...new Set(Array.isArray(targets) ? targets.filter((target) => typeof target === 'string' && Object.hasOwn(googleScopes, target)) : [])];
@@ -153,14 +159,15 @@ export function createGoogle(store, { useEnv = true, background = true } = {}) {
     if (pending.size >= 30) throw new HttpError(429, 'Too many pending sign-ins. Wait a few minutes and try again.');
     const id = randomBytes(24).toString('base64url');
     const verifier = randomBytes(48).toString('base64url');
-    pending.set(id, { expiry: Date.now() + 10 * 60_000, verifier, configId: fingerprint(), revision, selected });
+    pending.set(id, { expiry: Date.now() + 10 * 60_000, verifier, configId: fingerprint(), revision, selected, session });
     const url = new URL(authorizer);
     url.search = new URLSearchParams({ client_id: creds.clientId, redirect_uri: redirect.href, response_type: 'code', access_type: 'offline', prompt: 'consent select_account',
       scope: ['openid', 'profile', ...selected.map((target) => googleScopes[target])].join(' '), state: id, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url') }).toString();
     return { url: url.href, state: id, secure: redirect.protocol === 'https:' };
   }
-  async function callback(query, authorized = () => true) {
+  async function callback(query, authorized = () => true, session) {
     const id = text(query.state, 100), entry = pending.get(id);
+    if (entry && entry.session !== session) throw new HttpError(401, 'Return to the same Curiousity session to finish the Google connection.');
     pending.delete(id);
     if (!entry || entry.expiry < Date.now() || entry.configId !== fingerprint() || entry.revision !== revision) throw new HttpError(400, 'The Google sign-in expired. Connect again from Integrations.');
     const code = text(query.code, 2500);

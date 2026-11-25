@@ -43,6 +43,8 @@ else if (process.env.FIXTURE_REPLAY_STATE && args.includes('--dump-single-json')
     ...(state === 'is_live' ? { formats: [hls('capture')], ...(process.env.FIXTURE_LIVE_CHAT && { subtitles: { live_chat: [{ protocol: 'youtube_live_chat' }] } }) } : {}) }));
 }
 else if (args.includes('--dump-single-json') && Object.hasOwn(streams, id)) console.log(JSON.stringify({ id, title: 'Fixture livestream', is_live: true, live_status: 'is_live', formats: streams[id] }));
+else if (args.includes('--dump-single-json') && id === 'ForeignCut1') console.log(JSON.stringify({ id, title: 'Spanish-only caption fixture', duration: 16, language: 'es', subtitles: { es: [{ ext: 'vtt' }] } }));
+else if (args.includes('--dump-single-json') && id === 'VisualOnly1') console.log(JSON.stringify({ id, title: 'No transcript fixture', duration: 16, view_count: 42 }));
 else if (args.includes('--dump-single-json')) console.log(JSON.stringify({
   id, title: 'Fixture replay', channel: 'Fixture creator', duration: 41, live_status: 'was_live', was_live: true, language: 'en',
   subtitles: { en: [{ ext: 'vtt' }], es: [{ ext: 'vtt' }] }, heatmap: [{ start_time: 0, end_time: 9, value: 0.86 }],

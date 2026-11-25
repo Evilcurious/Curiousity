@@ -6,13 +6,14 @@ import { runWhisper } from './transcription.mjs';
 import { maxSourceBytes, maxSourceSeconds, jobDir } from './store.mjs';
 import { buildCandidates, clipCues, normalizeCues, parseVtt, pickAutoMoments, pickMoments } from './moments.mjs';
 import { makeAss, makeSrt } from './captions.mjs';
-import { maxClips, youtubeSource } from './validation.mjs';
+import { HttpError, maxClips, youtubeSource } from './validation.mjs';
 import { rankWithProvider, transcribeRemote } from './providers.mjs';
 import { liveArgs, livePlans, livePlanKey } from './live.mjs';
 import { captureSegments, runLiveMonitor } from './live-monitor.mjs';
 import { checkReplayDeadline, planReplayCheck, replayState } from './replay.mjs';
 import { exportFrame, languageCode, languageLabel, romanUrdu } from '../shared/exports.mjs';
 import { localizeClips, suggestHashtags } from './localization.mjs';
+import { videoEvidence, visualCandidatePool } from './video-evidence.mjs';
 
 const demoImage = join(ROOT, 'public', 'images', 'demo-studio.jpg');
 const demoAudio = join(ROOT, 'server', 'assets', 'demo-audio.m4a');
@@ -251,7 +252,7 @@ async function findTranscript({ meta, options, source, scratch, store, tools, si
   }
   if (!audio.some((db) => db > -58)) return { cues: [], label: 'No speech detected' };
   const choice = store.state.captions;
-  const profile = store.state.providers.find((p) => p.id === choice.providerId);
+  const profile = options.engineMode === 'local' ? null : store.state.providers.find((p) => p.id === choice.providerId);
   let warning;
   if (profile && choice.model) {
     try {
@@ -320,27 +321,45 @@ async function analyzeMedia({ job, store, options, root, scratch, signal, update
   const selection = options.aiProfile || 'workspace';
   const providerId = Object.hasOwn(job, 'chatProviderId') ? job.chatProviderId : options.demo || selection === 'local' ? null : selection === 'workspace' ? store.state.activeProviderId : selection;
   const savedProfile = providerId ? store.chatProfile(providerId) : null;
-  const profile = savedProfile?.model ? { ...savedProfile } : null;
+  const profile = options.engineMode !== 'local' && savedProfile?.model ? { ...savedProfile } : null;
+  const vision = options.engineMode === 'ai';
+  if (vision && !profile) {
+    if (isLive) return 'The selected AI model is unavailable. No AI clip was made.';
+    throw new Error('The selected AI model is no longer available. Select another model or use Local mode.');
+  }
   if (providerId && !profile) warn('The selected AI profile or chat model is no longer available. Local scoring was used.');
-  let engine = 'Local analysis', ordered = candidates;
+  let engine = 'Local analysis', ordered = candidates, visualSignal;
   if (reaction && !profile?.model) return 'Chat spike found, but the selected AI model is unavailable.';
-  if (profile?.model && (reaction || candidates.some((m) => m.excerpt))) {
-    const eligible = reaction ? candidates : candidates.filter((m) => m.excerpt.length > 15);
-    const pool = [...new Set([...pickMoments(eligible, Math.max(12, limit)), ...eligible])].slice(0, Math.min(30, Math.max(14, limit * 2)));
+  if (profile?.model && (vision || reaction || candidates.some((m) => m.excerpt))) {
+    const eligible = vision || reaction ? candidates : candidates.filter((m) => m.excerpt.length > 15);
+    const pool = vision ? visualCandidatePool(eligible, duration, limit) : [...new Set([...pickMoments(eligible, Math.max(12, limit)), ...eligible])].slice(0, Math.min(30, Math.max(14, limit * 2)));
     if (pool.length) {
-      report({ progress: 57, detail: `Ranking candidate moments with ${profile.name}.` });
       try {
-        const ranking = await rankWithProvider(profile, store, pool, signal, reaction && { messages: reaction.messages, baseline: reaction.baseline, approximatePeak: Math.max(0, reaction.seconds - offset) });
+        report({ progress: 52, detail: vision ? 'Preparing visual evidence from the downloaded video.' : `Ranking candidate moments with ${profile.name}.` });
+        const visual = vision ? await videoEvidence(path, pool, { meta, duration, scratch, live: isLive, native: profile.type === 'gemini', signal }) : null;
+        report({ progress: 57, detail: vision ? `Analyzing ${visual.signalLabel.toLowerCase()} with ${profile.name}.` : `Ranking candidate moments with ${profile.name}.` });
+        const ranking = await rankWithProvider(profile, store, visual?.candidates || pool, signal, reaction && { messages: reaction.messages, baseline: reaction.baseline, approximatePeak: Math.max(0, reaction.seconds - offset) }, visual);
         ordered = candidates.map((item) => {
           const ai = ranking.get(item.id);
-          return ai ? { ...item, score: Math.round(ai.score * 0.7 + item.score * 0.3), title: ai.title || item.title, reason: ai.reason || item.reason, ai: true } : item;
+          return ai ? { ...item, score: vision ? ai.score : Math.round(ai.score * 0.7 + item.score * 0.3), title: ai.title || item.title, reason: ai.reason || item.reason, ai: true } : item;
         }).sort((a, b) => Number(Boolean(b.ai)) - Number(Boolean(a.ai)) || b.score - a.score);
-        if (reaction) ordered = ordered.filter((item) => item.ai);
-        engine = profile.name;
+        if (reaction || vision) ordered = ordered.filter((item) => item.ai);
+        visualSignal = visual?.signalLabel;
+        engine = vision ? `AI · ${profile.name}` : profile.name;
       } catch (error) {
-        if (signal.aborted) throw signal.reason;
-        if (reaction) return 'Chat spike found, but the AI model could not rank it. No automatic clip was made.';
-        warn('The selected AI model did not return a usable ranking. Local scoring was used instead.');
+        signal.throwIfAborted();
+        const reason = error instanceof HttpError ? error.message : vision ? 'Could not prepare video evidence for this source.' : 'The ranking request could not be completed.';
+        const failure = `AI ranking failed. ${reason}`;
+        if (reaction) return `Chat spike found, but no automatic clip was made. ${failure}`;
+        if (vision) {
+          const inputs = [400, 413, 422].includes(error.providerStatus) ? ' Check that your model accepts the supplied video or multiple images.' : '';
+          const detail = `${failure}${inputs} Choose another AI profile or try Local instead.`;
+          if (isLive) return detail;
+          throw new Error(detail);
+        }
+        // Older projects did not explicitly pick an engine. Keep their
+        // compatibility fallback, with the actual cause shown to the member.
+        warn(`${failure} Local scoring was used instead.`);
       }
     }
   } else if (profile?.model) warn('The selected AI model needs a transcript; this source was scored locally.');
@@ -368,17 +387,18 @@ async function analyzeMedia({ job, store, options, root, scratch, signal, update
         return isLive ? null : asTracks(await downloadCaptions(meta, options.url, scratch, signal, language));
       },
       tryEnglish: path && tools.whisper && audio.some((db) => db > -58) ? async () => {
+        report({ detail: 'Preparing English captions with Local Whisper.' });
         try { return asTracks(await runWhisper(path, signal, true)); }
         catch (error) { if (signal.aborted) throw signal.reason; return null; }
       } : null,
     });
   }
   const anyCaptions = localized.tracks.some((rows) => rows.length);
-  if (localized.warning) warn(options.demo ? 'The demo includes English, Urdu, Roman Urdu and Spanish tracks. Original English captions were used.' : localized.warning);
-  if (options.captions && !anyCaptions && !localized.warning && (!isLive || audio.length)) warn(transcript.warning || 'No usable spoken captions were available for these clips.');
+  if (localized.warning && (anyCaptions || !transcript.warning)) warn(options.demo ? 'The demo includes English, Urdu, Roman Urdu and Spanish tracks. Original English captions were used.' : localized.warning);
+  if (options.captions && !anyCaptions && (transcript.warning || !localized.warning) && (!isLive || audio.length)) warn(transcript.warning || 'No usable spoken captions were available for these clips.');
   if (anyCaptions && !tools.subtitles) warn('This FFmpeg build does not support burned subtitles. SRT files are still available.');
   if (anyCaptions && tools.subtitles) await cp(captionFonts, join(scratch, 'caption-fonts'), { recursive: true });
-  const signals = [...new Set([...(job.signals || []), transcript.cues.length && 'Transcript', audio.some((db) => db > -58) && 'Audio activity', heatmap.length && 'Replay heatmap', reaction && 'Live chat spike'].filter(Boolean))];
+  const signals = [...new Set([...(job.signals || []), visualSignal, transcript.cues.length && 'Transcript', audio.some((db) => db > -58) && 'Audio activity', heatmap.length && 'Replay heatmap', reaction && 'Live chat spike'].filter(Boolean))];
   update({ engine, signals, frame, captionsSource: localized.label || transcript.label, warnings });
   report({ status: 'rendering', progress: 62, detail: `Rendering 1 of ${picks.length} clips in ${frame.ratio}.` });
   const fontWarning = 'Some caption characters could not be drawn. Install fonts for the caption language and rerun the project. The SRT contains the full text.';
@@ -399,7 +419,7 @@ async function analyzeMedia({ job, store, options, root, scratch, signal, update
     const { excerpt, ai, ...fields } = moment;
     fields.start = Number((moment.start + offset).toFixed(3));
     fields.end = Number((moment.end + offset).toFixed(3));
-    if (reaction && !excerpt) { fields.title = 'Live chat highlight'; fields.reason = `Chat activity rose to ${reaction.messages} messages in ten seconds. AI ranked this window using the available signals.`; }
+    if (reaction && !excerpt && !visualSignal) { fields.title = 'Live chat highlight'; fields.reason = `Chat activity rose to ${reaction.messages} messages in ten seconds. AI ranked this window using the available signals.`; }
     const hashtags = suggestHashtags({ choice: options.hashtagLanguage, transcriptLanguage: transcript.language || sourceLanguage(meta), localizedLanguage: localized.language, excerpt, translated: rows.map((row) => row.text).join(' '), live: isLive });
     const { missingGlyphs, ...assets } = rendered;
     if (missingGlyphs) warn(fontWarning);
@@ -474,8 +494,9 @@ export async function processProject(job, store, session, update) {
             const profile = await audioProfile(path, signal);
             const duration = Math.min(depth, profile.duration || depth);
             if (duration < 6) return 'Wait for more playable footage.';
-            const transcript = await findTranscript({ meta, options, source: path, scratch: dir, store, tools, signal, audio: profile.audio });
-            return analyzeMedia({ job, store, options, root, scratch: dir, signal, update, path, meta, duration, audio: profile.audio, transcript, tools, isLive: true, offset, batchLimit: limit, reaction });
+            const clipOptions = job.options;
+            const transcript = await findTranscript({ meta, options: clipOptions, source: path, scratch: dir, store, tools, signal, audio: profile.audio });
+            return analyzeMedia({ job, store, options: clipOptions, root, scratch: dir, signal, update, path, meta, duration, audio: profile.audio, transcript, tools, isLive: true, offset, batchLimit: limit, reaction });
           },
         });
         if (job.monitor.open && job.monitor.phase === 'switching') {

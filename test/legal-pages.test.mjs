@@ -13,8 +13,8 @@ test('clean legal URLs serve complete public HTML without a session or the SPA',
   const { url, agent } = await startEngine(t, { env: { DATA_DIR: root, ALLOW_SIGNUP: 'false', PUBLIC_ORIGIN: site, TRUST_PROXY: 'loopback' } });
   const headers = { Host: 'ai.devzard.online', 'X-Forwarded-Proto': 'https' };
   const documents = [
-    { path: 'terms', other: 'privacy', title: 'Terms of Service', required: ['Content and permissions', 'Acceptable use', 'YouTube API Services', 'https://www.youtube.com/t/terms'] },
-    { path: 'privacy', other: 'terms', title: 'Privacy Policy', required: ['How we use information', 'Sharing and retention', 'Google Drive and YouTube', 'drive.file', 'youtube.upload', 'https://policies.google.com/privacy', 'https://myaccount.google.com/permissions', 'deletion of your data'] },
+    { path: 'terms', other: 'privacy', title: 'Terms of Service', required: ['Content and permissions', 'Acceptable use', 'YouTube API Services', 'https://www.youtube.com/t/terms', 'workflow requests'] },
+    { path: 'privacy', other: 'terms', title: 'Privacy Policy', required: ['How we use information', 'Sharing and retention', 'Google Drive and YouTube', 'drive.file', 'youtube.upload', 'https://policies.google.com/privacy', 'https://myaccount.google.com/permissions', 'deletion of your data', 'timestamped video frames', 'n8n Workflows', 'workspace member ID'] },
   ];
 
   for (const { path, other, title, required } of documents) {

@@ -9,7 +9,7 @@ export const writeHeaders = { 'X-Clipforge': 'workspace' };
 export async function startEngine(t, { cwd, env, flags = [], imports = [] } = {}) {
   const child = spawn(process.execPath, [...imports.flatMap((path) => ['--import', resolve(path)]), resolve('server/main.mjs'), ...flags], { cwd, env: {
     ...process.env, HOST: '127.0.0.1', PORT: '0', ADMIN_EMAIL: '', ADMIN_PASSWORD: '', PUBLIC_ORIGIN: '', TRUST_PROXY: '', ALLOW_SIGNUP: 'true',
-    COMPOSIO_API_KEY: '', ENABLE_LEGACY_INTEGRATION_API: 'false', GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '', GOOGLE_REDIRECT_URI: '', TIKTOK_CLIENT_KEY: '', TIKTOK_CLIENT_SECRET: '', TIKTOK_REDIRECT_URI: '', ...env,
+    ENABLE_LEGACY_INTEGRATION_API: 'false', GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '', GOOGLE_REDIRECT_URI: '', TIKTOK_CLIENT_KEY: '', TIKTOK_CLIENT_SECRET: '', TIKTOK_REDIRECT_URI: '', ...env,
   } });
   const exited = once(child, 'close');
   const stop = async () => { child.kill('SIGTERM'); await exited; };
